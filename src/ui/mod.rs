@@ -1,45 +1,85 @@
 use crate::app::App;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+
+pub mod detail;
+pub mod main_view;
+pub mod search_bar;
+pub mod sidebar;
+pub mod status_bar;
+pub mod task_pane;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let vchunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // search bar
-            Constraint::Min(0),    // body
-            Constraint::Length(1), // status bar
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
-    draw_search_bar(frame, app, vchunks[0]);
+    search_bar::draw(frame, app, vchunks[0]);
     draw_body(frame, app, vchunks[1]);
-    draw_status_bar(frame, app, vchunks[2]);
+    status_bar::draw(frame, app, vchunks[2]);
 }
 
-fn draw_search_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let text = format!("/ {}", app.query);
-    let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Plaza "));
-    frame.render_widget(p, area);
+fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
+    // Task pane is shown as a right column when a task exists (peek), and as a
+    // full overlay when expanded (handled in task_pane::draw_overlay).
+    let show_peek = app.task.is_some() && !app.task_expanded;
+    let body = if show_peek {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(20), Constraint::Min(0), Constraint::Length(34)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(20), Constraint::Min(0)])
+            .split(area)
+    };
+
+    sidebar::draw(frame, app, body[0]);
+    main_view::draw(frame, app, body[1]);
+    if show_peek {
+        task_pane::draw_peek(frame, app, body[2]);
+    }
+    if app.task_expanded {
+        task_pane::draw_overlay(frame, app, area);
+    }
+
+    if app.confirm.is_some() {
+        draw_confirm(frame, app, area);
+    }
 }
 
-fn draw_body(frame: &mut Frame, _app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(20), Constraint::Min(0)])
-        .split(area);
-
-    let sidebar = Block::default().borders(Borders::ALL).title(" sidebar ");
-    let main = Block::default().borders(Borders::ALL).title(" results ");
-    frame.render_widget(sidebar, chunks[0]);
-    frame.render_widget(main, chunks[1]);
+fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(spec) = &app.confirm else { return };
+    let rect = centered_rect(60, 7, area);
+    let cmd = format!("{} {}", spec.command.program, spec.command.args.join(" "));
+    let text = format!(
+        "Install {} from {}\nvia: {}\n\n[y] confirm   [n/esc] cancel",
+        spec.targets.join(", "),
+        spec.source_id.badge(),
+        cmd
+    );
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(" confirm install "),
+        ),
+        rect,
+    );
 }
 
-fn draw_status_bar(frame: &mut Frame, _app: &App, area: Rect) {
-    let p = Paragraph::new(" ↑↓ move  ⏎ open  / search  q quit ")
-        .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(p, area);
+/// A centered rect `width` cols by `height` rows (clamped to `area`).
+pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect { x, y, width: w, height: h }
 }

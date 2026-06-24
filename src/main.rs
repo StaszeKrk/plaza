@@ -9,9 +9,10 @@ mod search;
 mod sources;
 mod ui;
 
-use crate::app::App;
+use crate::app::{App, Focus};
 use crate::event::AppEvent;
 use crate::model::SourceId;
+use crate::sources::Source;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -21,6 +22,8 @@ use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
@@ -48,11 +51,12 @@ fn install_panic_hook() {
 }
 
 async fn run_tui() -> anyhow::Result<()> {
-    let sources = sources::detect_sources();
-    if sources.is_empty() {
+    let detected = sources::detect_sources();
+    if detected.is_empty() {
         eprintln!("plaza: no supported package sources detected (need pacman and/or yay)");
         std::process::exit(1);
     }
+    let sources: Vec<Arc<dyn Source>> = detected.into_iter().map(Arc::from).collect();
     let source_ids: Vec<SourceId> = sources.iter().map(|s| s.id()).collect();
 
     install_panic_hook();
@@ -68,9 +72,8 @@ async fn run_tui() -> anyhow::Result<()> {
     spawn_input_task(tx.clone());
 
     terminal.draw(|f| ui::draw(f, &app))?;
-
     while let Some(ev) = rx.recv().await {
-        handle_event(&mut app, ev, &tx);
+        handle_event(&mut app, ev, &tx, &sources);
         if app.should_quit {
             break;
         }
@@ -94,19 +97,92 @@ fn spawn_input_task(tx: UnboundedSender<AppEvent>) {
     });
 }
 
-fn handle_event(app: &mut App, ev: AppEvent, _tx: &UnboundedSender<AppEvent>) {
-    if let AppEvent::Input(Event::Key(key)) = ev {
-        handle_key(app, key);
+fn handle_event(
+    app: &mut App,
+    ev: AppEvent,
+    tx: &UnboundedSender<AppEvent>,
+    sources: &[Arc<dyn Source>],
+) {
+    match ev {
+        AppEvent::Input(Event::Key(key)) => handle_key(app, key, tx),
+        AppEvent::DispatchSearch { gen } => {
+            if gen == app.debounce_gen && !app.query.is_empty() {
+                let query_id = app.start_query(app.query.clone());
+                dispatch_search(app.query.clone(), query_id, sources, tx);
+            }
+        }
+        AppEvent::SearchHits { query_id, source_id, hits } => {
+            app.apply_search_results(query_id, source_id, hits);
+        }
+        AppEvent::SearchError { query_id, source_id } => {
+            app.set_source_error(query_id, source_id);
+        }
+        _ => {}
     }
 }
 
-fn handle_key(app: &mut App, key: KeyEvent) {
+fn dispatch_search(
+    query: String,
+    query_id: u64,
+    sources: &[Arc<dyn Source>],
+    tx: &UnboundedSender<AppEvent>,
+) {
+    for src in sources {
+        let src = Arc::clone(src);
+        let tx = tx.clone();
+        let query = query.clone();
+        tokio::spawn(async move {
+            let source_id = src.id();
+            match src.search(&query).await {
+                Ok(hits) => {
+                    let _ = tx.send(AppEvent::SearchHits { query_id, source_id, hits });
+                }
+                Err(_) => {
+                    let _ = tx.send(AppEvent::SearchError { query_id, source_id });
+                }
+            }
+        });
+    }
+}
+
+fn schedule_debounced_search(app: &mut App, tx: &UnboundedSender<AppEvent>) {
+    app.debounce_gen += 1;
+    let gen = app.debounce_gen;
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let _ = tx.send(AppEvent::DispatchSearch { gen });
+    });
+}
+
+fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.should_quit = true;
         return;
     }
-    if let KeyCode::Char('q') = key.code {
-        app.should_quit = true;
+
+    if app.focus == Focus::Search {
+        match key.code {
+            KeyCode::Char(c) => {
+                app.query.push(c);
+                schedule_debounced_search(app, tx);
+            }
+            KeyCode::Backspace => {
+                app.query.pop();
+                schedule_debounced_search(app, tx);
+            }
+            KeyCode::Esc | KeyCode::Down | KeyCode::Enter => app.focus = Focus::Main,
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char('/') => app.focus = Focus::Search,
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
+        KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
+        _ => {}
     }
 }
 

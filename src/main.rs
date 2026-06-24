@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 mod model;
+mod search;
 mod sources;
 
 #[tokio::main]

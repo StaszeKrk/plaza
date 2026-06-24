@@ -15,7 +15,10 @@ use crate::app::{App, Focus, MainView, TaskView};
 use crate::event::AppEvent;
 use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -47,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
 fn install_panic_hook() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         original(info);
@@ -66,6 +70,16 @@ async fn run_tui() -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    // Ask the terminal (kitty keyboard protocol, e.g. ghostty) to report key
+    // event types so held-key auto-repeat (Repeat) is distinguishable from a
+    // real Press. Queried before the input task starts reading stdin.
+    let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    if enhanced {
+        let _ = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+        );
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -84,6 +98,9 @@ async fn run_tui() -> anyhow::Result<()> {
         terminal.draw(|f| ui::draw(f, &app))?;
     }
 
+    if enhanced {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -108,10 +125,10 @@ fn handle_event(
     sources: &[Arc<dyn Source>],
 ) {
     match ev {
-        // Ignore key-release events (terminals with the kitty keyboard protocol,
-        // e.g. ghostty, report them — otherwise a held key types an extra char
-        // on release and flickers the search).
-        AppEvent::Input(Event::Key(key)) if key.kind != KeyEventKind::Release => {
+        // Act only on real key presses. With the kitty protocol enabled, held-key
+        // auto-repeat arrives as Repeat (and Release) — ignoring those stops a
+        // held key from flooding the query with one char per repeat.
+        AppEvent::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => {
             handle_key(app, key, tx)
         }
         AppEvent::Input(Event::Resize(w, h)) => {

@@ -177,12 +177,37 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
-    match key.code {
-        KeyCode::Char('/') => app.focus = Focus::Search,
-        KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
-        KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
-        _ => {}
+    use crate::app::MainView;
+    match app.main_view {
+        MainView::Results => match key.code {
+            KeyCode::Char('/') => app.focus = Focus::Search,
+            KeyCode::Char('q') => app.should_quit = true,
+            KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
+            KeyCode::Enter => {
+                if app.selected_row().is_some() {
+                    app.detail_selected = 0;
+                    app.main_view = MainView::Detail;
+                }
+            }
+            _ => {}
+        },
+        MainView::Detail => match key.code {
+            KeyCode::Char('/') => app.focus = Focus::Search,
+            KeyCode::Char('q') => app.should_quit = true,
+            KeyCode::Esc => app.main_view = MainView::Results,
+            KeyCode::Char('j') | KeyCode::Down => {
+                let n = app.selected_row().map(|r| r.providers.len()).unwrap_or(0);
+                if n > 0 {
+                    app.detail_selected = (app.detail_selected + 1).min(n - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.detail_selected = app.detail_selected.saturating_sub(1);
+            }
+            // Enter (install) is wired in Task 8.
+            _ => {}
+        },
     }
 }
 

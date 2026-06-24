@@ -17,6 +17,6 @@ pub enum AppEvent {
     Stats(InstalledStats),
     Updates(UpdatesInfo),
     Installed(InstalledIndex),
-    PtyOutput(Vec<u8>),
-    ActionFinished { success: bool, code: u32 },
+    PtyOutput { id: u64, bytes: Vec<u8> },
+    ActionFinished { id: u64, success: bool, code: u32 },
 }

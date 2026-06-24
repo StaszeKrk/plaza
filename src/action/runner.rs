@@ -11,6 +11,7 @@ pub enum TaskState {
 }
 
 pub struct ActiveTask {
+    pub id: u64,
     pub spec: ActionSpec,
     pub parser: vt100::Parser,
     pub writer: Box<dyn Write + Send>,
@@ -20,10 +21,12 @@ pub struct ActiveTask {
 }
 
 /// Spawn `spec.command` in a PTY of size rows×cols. Output bytes are sent as
-/// `AppEvent::PtyOutput`; on exit, `AppEvent::ActionFinished` is sent. Reading
-/// and waiting happen on dedicated OS threads (blocking IO).
+/// `AppEvent::PtyOutput`; on exit, `AppEvent::ActionFinished` is sent. Both
+/// carry `id` so the UI can ignore events from a task it has since replaced.
+/// Reading and waiting happen on dedicated OS threads (blocking IO).
 pub fn start_action(
     spec: ActionSpec,
+    id: u64,
     rows: u16,
     cols: u16,
     tx: UnboundedSender<AppEvent>,
@@ -58,7 +61,8 @@ pub fn start_action(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if tx_read.send(AppEvent::PtyOutput(buf[..n].to_vec())).is_err() {
+                    let ev = AppEvent::PtyOutput { id, bytes: buf[..n].to_vec() };
+                    if tx_read.send(ev).is_err() {
                         break;
                     }
                 }
@@ -74,10 +78,11 @@ pub fn start_action(
             Ok(s) => (s.success(), s.exit_code()),
             Err(_) => (false, 1),
         };
-        let _ = tx.send(AppEvent::ActionFinished { success, code });
+        let _ = tx.send(AppEvent::ActionFinished { id, success, code });
     });
 
     Ok(ActiveTask {
+        id,
         spec,
         parser: vt100::Parser::new(rows, cols, 2000),
         writer,
@@ -129,17 +134,17 @@ mod tests {
             },
         };
         let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
-        let mut task = start_action(spec, 24, 80, tx).expect("spawn pty");
+        let mut task = start_action(spec, 1, 24, 80, tx).expect("spawn pty");
 
         let mut got_output = false;
         let mut finished = false;
         for _ in 0..1000 {
             match tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await {
-                Ok(Some(AppEvent::PtyOutput(bytes))) => {
+                Ok(Some(AppEvent::PtyOutput { bytes, .. })) => {
                     task.parser.process(&bytes);
                     got_output = true;
                 }
-                Ok(Some(AppEvent::ActionFinished { success, code })) => {
+                Ok(Some(AppEvent::ActionFinished { success, code, .. })) => {
                     task.state = TaskState::Done { success, code };
                     finished = true;
                     break;

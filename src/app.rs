@@ -55,6 +55,7 @@ pub struct App {
     pub confirm: Option<ActionSpec>,
     pub task: Option<ActiveTask>,
     pub task_view: TaskView,
+    pub task_seq: u64,
     pub should_quit: bool,
 }
 
@@ -82,6 +83,7 @@ impl App {
             confirm: None,
             task: None,
             task_view: TaskView::Hidden,
+            task_seq: 0,
             should_quit: false,
         }
     }

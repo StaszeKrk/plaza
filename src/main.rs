@@ -123,21 +123,29 @@ fn handle_event(
         AppEvent::Stats(s) => app.stats = s,
         AppEvent::Updates(u) => app.updates = u,
         AppEvent::Installed(idx) => app.installed = idx,
-        AppEvent::PtyOutput(bytes) => {
+        AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
             if let Some(task) = &mut app.task {
-                task.parser.process(&bytes);
-                if !watching {
-                    task.has_unseen_output = true;
+                if task.id == id {
+                    task.parser.process(&bytes);
+                    if !watching {
+                        task.has_unseen_output = true;
+                    }
                 }
             }
         }
-        AppEvent::ActionFinished { success, code } => {
+        AppEvent::ActionFinished { id, success, code } => {
+            let mut matched = false;
             if let Some(task) = &mut app.task {
-                task.state = TaskState::Done { success, code };
+                if task.id == id {
+                    task.state = TaskState::Done { success, code };
+                    matched = true;
+                }
             }
-            // Refresh stats + installed index after a completed action.
-            spawn_stats_tasks(tx.clone());
+            // Refresh stats + installed index after the current action completes.
+            if matched {
+                spawn_stats_tasks(tx.clone());
+            }
         }
         _ => {}
     }
@@ -145,11 +153,16 @@ fn handle_event(
 
 fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     let Some(spec) = app.confirm.take() else { return };
+    // Cancel/replace any prior task: dropping it closes the PTY, so an abandoned
+    // child (e.g. one still waiting at the sudo prompt) gets a hangup and exits.
+    app.task = None;
+    app.task_seq += 1;
+    let id = app.task_seq;
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     // leave a small margin for the overlay border
     let rows = rows.saturating_sub(4).max(10);
     let cols = cols.saturating_sub(4).max(40);
-    match start_action(spec, rows, cols, tx.clone()) {
+    match start_action(spec, id, rows, cols, tx.clone()) {
         Ok(task) => {
             app.task = Some(task);
             app.task_view = TaskView::Expanded;
@@ -256,12 +269,6 @@ fn schedule_debounced_search(app: &mut App, tx: &UnboundedSender<AppEvent>) {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
-    // Ctrl-C always quits.
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        app.should_quit = true;
-        return;
-    }
-
     // Confirm modal captures input first.
     if app.confirm.is_some() {
         match key.code {
@@ -278,10 +285,22 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
+    // The focused task pane owns input — including Ctrl-C, which forwards to the
+    // child as SIGINT to cancel a running install (rather than quitting Plaza).
+    if app.focus == Focus::TaskPane {
+        handle_task_pane_key(app, key);
+        return;
+    }
+
+    // Elsewhere, Ctrl-C quits.
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        app.should_quit = true;
+        return;
+    }
+
     match app.focus {
-        Focus::TaskPane => handle_task_pane_key(app, key),
         Focus::Search => handle_search_key(app, key, tx),
-        Focus::Sidebar | Focus::Main => handle_browse_key(app, key),
+        _ => handle_browse_key(app, key),
     }
 }
 
@@ -455,13 +474,8 @@ fn handle_browse_key(app: &mut App, key: KeyEvent) {
 }
 
 /// Build an ActionSpec for the selected provider and open the confirm modal.
-/// Refuses if an install is already running (one at a time in v1).
+/// If a task is still running, the confirm will note it gets cancelled.
 fn request_install(app: &mut App) {
-    if running_task(app) {
-        app.task_view = TaskView::Expanded;
-        app.focus = Focus::TaskPane;
-        return;
-    }
     let Some(row) = app.selected_row() else { return };
     let Some(provider) = row.providers.get(app.detail_selected) else { return };
     let source_id = provider.source_id;

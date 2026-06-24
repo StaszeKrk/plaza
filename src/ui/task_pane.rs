@@ -34,7 +34,7 @@ pub fn draw_overlay(frame: &mut Frame, app: &App, area: Rect) {
     let Some(task) = &app.task else { return };
     let (title, color) = status_title(task);
     let done = matches!(task.state, TaskState::Done { .. });
-    let hint = if done { "esc/q close" } else { "` peek · esc peek" };
+    let hint = if done { "esc/q close" } else { "^C cancel · esc/` peek" };
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)

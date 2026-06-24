@@ -56,14 +56,27 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
     let Some(spec) = &app.confirm else { return };
-    let rect = centered_rect(60, 7, area);
+    // Warn if confirming will cancel an install that is still running.
+    let busy = matches!(
+        app.task.as_ref().map(|t| &t.state),
+        Some(crate::action::runner::TaskState::Running)
+    );
+    let height = if busy { 8 } else { 7 };
+    let rect = centered_rect(62, height, area);
     let cmd = format!("{} {}", spec.command.program, spec.command.args.join(" "));
-    let text = format!(
-        "Install {} from {}\nvia: {}\n\n[y] confirm   [n/esc] cancel",
+    let mut text = format!(
+        "Install {} from {}\nvia: {}\n",
         spec.targets.join(", "),
         spec.source_id.badge(),
         cmd
     );
+    if let Some(running) = app.task.as_ref().filter(|_| busy) {
+        text.push_str(&format!(
+            "\n⚠ cancels the running install of {}\n",
+            running.spec.targets.join(", ")
+        ));
+    }
+    text.push_str("\n[y] confirm   [n/esc] cancel");
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(text).block(

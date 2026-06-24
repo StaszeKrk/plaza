@@ -10,6 +10,9 @@ pub struct Settings {
     /// Collapse all pacman repos into a single `[official]` provider (using the
     /// default/highest-priority repo) instead of showing each repo separately.
     pub collapse_repos: bool,
+    /// Debounce before a search fires, in ms. Raise above your terminal's
+    /// key-repeat delay so holding a key doesn't flash intermediate results.
+    pub debounce_ms: u64,
 }
 
 impl Default for Settings {
@@ -17,6 +20,7 @@ impl Default for Settings {
         Settings {
             show_hotkeys: true,
             collapse_repos: false,
+            debounce_ms: 400,
         }
     }
 }

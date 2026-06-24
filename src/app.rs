@@ -27,6 +27,17 @@ pub enum SourceState {
     Error,
 }
 
+/// Cycle the search-debounce presets (ms). Raise it past your key-repeat delay
+/// so holding a key stops flashing intermediate results.
+fn next_debounce(cur: u64) -> u64 {
+    match cur {
+        d if d < 400 => 400,
+        d if d < 600 => 600,
+        d if d < 800 => 800,
+        _ => 250,
+    }
+}
+
 /// Visibility of the background-task (install) pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskView {
@@ -131,8 +142,8 @@ impl App {
 
     // --- Options overlay ---
 
-    /// Number of option toggles.
-    pub const OPTIONS_COUNT: usize = 2;
+    /// Number of option rows.
+    pub const OPTIONS_COUNT: usize = 3;
 
     pub fn move_options(&mut self, delta: i32) {
         let max = Self::OPTIONS_COUNT as i32 - 1;
@@ -144,6 +155,7 @@ impl App {
         match self.options_selected {
             0 => self.settings.show_hotkeys = !self.settings.show_hotkeys,
             1 => self.settings.collapse_repos = !self.settings.collapse_repos,
+            2 => self.settings.debounce_ms = next_debounce(self.settings.debounce_ms),
             _ => {}
         }
         self.settings.save();

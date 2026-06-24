@@ -120,9 +120,13 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
             sel == 1,
             format!("{} Group repos as [official]", check(app.settings.collapse_repos)),
         ),
+        row(
+            sel == 2,
+            format!("    Search delay: {}ms", app.settings.debounce_ms),
+        ),
         Line::from(""),
         Line::from(Span::styled(
-            "  ↑↓ move · space toggle · esc close",
+            "  ↑↓ move · space toggle/cycle · esc close",
             Style::default().fg(Color::DarkGray),
         )),
     ];

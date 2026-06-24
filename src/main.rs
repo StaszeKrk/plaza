@@ -125,10 +125,11 @@ fn handle_event(
     sources: &[Arc<dyn Source>],
 ) {
     match ev {
-        // Act only on real key presses. With the kitty protocol enabled, held-key
-        // auto-repeat arrives as Repeat (and Release) — ignoring those stops a
-        // held key from flooding the query with one char per repeat.
-        AppEvent::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+        // Accept presses and auto-repeat (so holding a key keeps building the
+        // query); ignore only key-release events. Whether results show mid-hold
+        // is governed by the debounce delay (settings.debounce_ms), which the
+        // user can raise past their terminal's key-repeat delay.
+        AppEvent::Input(Event::Key(key)) if key.kind != KeyEventKind::Release => {
             handle_key(app, key, tx)
         }
         AppEvent::Input(Event::Resize(w, h)) => {
@@ -322,9 +323,10 @@ fn dispatch_search(
 fn schedule_debounced_search(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     app.debounce_gen += 1;
     let gen = app.debounce_gen;
+    let delay = app.settings.debounce_ms;
     let tx = tx.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(delay)).await;
         let _ = tx.send(AppEvent::DispatchSearch { gen });
     });
 }

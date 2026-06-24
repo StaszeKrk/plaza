@@ -10,7 +10,7 @@ mod sources;
 mod ui;
 
 use crate::action::runner::{key_to_bytes, start_action, TaskState};
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, MainView, TaskView};
 use crate::event::AppEvent;
 use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
@@ -124,9 +124,10 @@ fn handle_event(
         AppEvent::Updates(u) => app.updates = u,
         AppEvent::Installed(idx) => app.installed = idx,
         AppEvent::PtyOutput(bytes) => {
+            let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
             if let Some(task) = &mut app.task {
                 task.parser.process(&bytes);
-                if !(app.focus == Focus::TaskPane && app.task_expanded) {
+                if !watching {
                     task.has_unseen_output = true;
                 }
             }
@@ -151,7 +152,7 @@ fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     match start_action(spec, rows, cols, tx.clone()) {
         Ok(task) => {
             app.task = Some(task);
-            app.task_expanded = true;
+            app.task_view = TaskView::Expanded;
             app.focus = Focus::TaskPane;
         }
         Err(e) => {
@@ -261,110 +262,26 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
-    // 1) Confirm modal captures input first.
+    // Confirm modal captures input first.
     if app.confirm.is_some() {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => begin_install(app, tx),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                app.confirm = None;
-            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.confirm = None,
             _ => {}
         }
         return;
     }
 
-    // 2) Backtick toggles the task pane from anywhere (if a task exists).
+    // Backtick: show+expand the task pane, or collapse an expanded one to a peek.
     if key.code == KeyCode::Char('`') {
-        if app.task.is_some() {
-            app.task_expanded = !app.task_expanded;
-            if app.task_expanded {
-                app.focus = Focus::TaskPane;
-                if let Some(t) = &mut app.task {
-                    t.has_unseen_output = false;
-                }
-            } else {
-                app.focus = Focus::Main;
-            }
-        }
+        toggle_task_pane(app);
         return;
     }
 
-    // 3) When the task pane is focused+expanded, forward input to the child.
-    if app.focus == Focus::TaskPane && app.task_expanded {
-        match key.code {
-            KeyCode::Esc => {
-                app.task_expanded = false;
-                app.focus = Focus::Main;
-            }
-            _ => {
-                if let Some(task) = &mut app.task {
-                    if let Some(bytes) = key_to_bytes(key) {
-                        let _ = task.writer.write_all(&bytes);
-                        let _ = task.writer.flush();
-                    }
-                }
-            }
-        }
-        return;
-    }
-
-    // 4) Search bar focused.
-    if app.focus == Focus::Search {
-        match key.code {
-            KeyCode::Char(c) => {
-                app.query.push(c);
-                schedule_debounced_search(app, tx);
-            }
-            KeyCode::Backspace => {
-                app.query.pop();
-                schedule_debounced_search(app, tx);
-            }
-            KeyCode::Esc | KeyCode::Down | KeyCode::Enter => app.focus = Focus::Main,
-            _ => {}
-        }
-        return;
-    }
-
-    // 5) Browsing (Main focus). `q` guard: don't quit during a running install.
-    use crate::app::MainView;
-    if key.code == KeyCode::Char('q') {
-        if running_task(app) {
-            app.task_expanded = true;
-            app.focus = Focus::TaskPane;
-        } else {
-            app.should_quit = true;
-        }
-        return;
-    }
-    if key.code == KeyCode::Char('/') {
-        app.focus = Focus::Search;
-        return;
-    }
-
-    match app.main_view {
-        MainView::Results => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
-            KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
-            KeyCode::Enter if app.selected_row().is_some() => {
-                app.detail_selected = 0;
-                app.main_view = MainView::Detail;
-            }
-            _ => {}
-        },
-        MainView::Detail => match key.code {
-            KeyCode::Esc => app.main_view = MainView::Results,
-            KeyCode::Char('j') | KeyCode::Down => {
-                let n = app.selected_row().map(|r| r.providers.len()).unwrap_or(0);
-                if n > 0 {
-                    app.detail_selected = (app.detail_selected + 1).min(n - 1);
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.detail_selected = app.detail_selected.saturating_sub(1);
-            }
-            KeyCode::Enter => request_install(app),
-            _ => {}
-        },
+    match app.focus {
+        Focus::TaskPane => handle_task_pane_key(app, key),
+        Focus::Search => handle_search_key(app, key, tx),
+        Focus::Sidebar | Focus::Main => handle_browse_key(app, key),
     }
 }
 
@@ -372,11 +289,176 @@ fn running_task(app: &App) -> bool {
     matches!(app.task.as_ref().map(|t| &t.state), Some(TaskState::Running))
 }
 
+fn task_done(app: &App) -> bool {
+    matches!(app.task.as_ref().map(|t| &t.state), Some(TaskState::Done { .. }))
+}
+
+/// Quit, unless an install is still running — in which case surface it instead.
+fn try_quit(app: &mut App) {
+    if running_task(app) {
+        app.task_view = TaskView::Expanded;
+        app.focus = Focus::TaskPane;
+        if let Some(t) = &mut app.task {
+            t.has_unseen_output = false;
+        }
+    } else {
+        app.should_quit = true;
+    }
+}
+
+/// Backtick handler: expand+focus the task pane, or collapse it to a peek.
+fn toggle_task_pane(app: &mut App) {
+    if app.task.is_none() {
+        return;
+    }
+    match app.task_view {
+        TaskView::Expanded => {
+            app.task_view = TaskView::Peek;
+            app.focus = Focus::Main;
+        }
+        TaskView::Peek | TaskView::Hidden => {
+            app.task_view = TaskView::Expanded;
+            app.focus = Focus::TaskPane;
+            if let Some(t) = &mut app.task {
+                t.has_unseen_output = false;
+            }
+        }
+    }
+}
+
+fn handle_task_pane_key(app: &mut App, key: KeyEvent) {
+    let done = task_done(app);
+    match app.task_view {
+        TaskView::Expanded => {
+            if done {
+                // Nothing to forward; any dismiss key closes it.
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('x') => {
+                        app.dismiss_task()
+                    }
+                    _ => {}
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => app.task_view = TaskView::Peek, // step down, keep focus
+                    _ => {
+                        if let Some(task) = &mut app.task {
+                            if let Some(bytes) = key_to_bytes(key) {
+                                let _ = task.writer.write_all(&bytes);
+                                let _ = task.writer.flush();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        TaskView::Peek => match key.code {
+            KeyCode::Enter => toggle_task_pane(app), // expand
+            KeyCode::Esc | KeyCode::Char('x') => {
+                if done {
+                    app.dismiss_task();
+                } else {
+                    app.task_view = TaskView::Hidden; // hide a running task
+                    app.focus = Focus::Main;
+                }
+            }
+            KeyCode::Tab => app.focus_next(),
+            KeyCode::BackTab => app.focus_prev(),
+            KeyCode::Left | KeyCode::Char('h') => app.focus_left(),
+            KeyCode::Char('/') => app.focus = Focus::Search,
+            KeyCode::Char('q') => try_quit(app),
+            _ => {}
+        },
+        TaskView::Hidden => app.focus = Focus::Main, // not focusable while hidden
+    }
+}
+
+fn handle_search_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
+    match key.code {
+        KeyCode::Char(c) => {
+            app.query.push(c);
+            schedule_debounced_search(app, tx);
+        }
+        KeyCode::Backspace => {
+            app.query.pop();
+            schedule_debounced_search(app, tx);
+        }
+        KeyCode::Esc | KeyCode::Down | KeyCode::Enter => app.focus = Focus::Main,
+        KeyCode::Tab => app.focus_next(),
+        KeyCode::BackTab => app.focus_prev(),
+        _ => {}
+    }
+}
+
+fn handle_browse_key(app: &mut App, key: KeyEvent) {
+    // Keys shared by the sidebar and main panes.
+    match key.code {
+        KeyCode::Char('q') => return try_quit(app),
+        KeyCode::Char('/') => {
+            app.focus = Focus::Search;
+            return;
+        }
+        KeyCode::Tab => return app.focus_next(),
+        KeyCode::BackTab => return app.focus_prev(),
+        KeyCode::Left | KeyCode::Char('h') => return app.focus_left(),
+        KeyCode::Right | KeyCode::Char('l') => return app.focus_right(),
+        _ => {}
+    }
+
+    match app.focus {
+        Focus::Sidebar => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if app.sidebar_selected == 0 {
+                    app.focus = Focus::Search;
+                } else {
+                    app.move_sidebar(-1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => app.move_sidebar(1),
+            // only "Search" (index 0) is wired in v1
+            KeyCode::Enter if app.sidebar_selected == 0 => app.focus = Focus::Search,
+            _ => {}
+        },
+        Focus::Main => match app.main_view {
+            MainView::Results => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if app.results_selected == 0 {
+                        app.focus = Focus::Search;
+                    } else {
+                        app.move_selection(-1);
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+                KeyCode::Enter if app.selected_row().is_some() => {
+                    app.detail_selected = 0;
+                    app.main_view = MainView::Detail;
+                }
+                _ => {}
+            },
+            MainView::Detail => match key.code {
+                KeyCode::Esc => app.main_view = MainView::Results,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.detail_selected = app.detail_selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let n = app.selected_row().map(|r| r.providers.len()).unwrap_or(0);
+                    if n > 0 {
+                        app.detail_selected = (app.detail_selected + 1).min(n - 1);
+                    }
+                }
+                KeyCode::Enter => request_install(app),
+                _ => {}
+            },
+        },
+        _ => {}
+    }
+}
+
 /// Build an ActionSpec for the selected provider and open the confirm modal.
 /// Refuses if an install is already running (one at a time in v1).
 fn request_install(app: &mut App) {
     if running_task(app) {
-        app.task_expanded = true;
+        app.task_view = TaskView::Expanded;
         app.focus = Focus::TaskPane;
         return;
     }

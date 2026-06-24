@@ -24,9 +24,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
-    // Task pane is shown as a right column when a task exists (peek), and as a
-    // full overlay when expanded (handled in task_pane::draw_overlay).
-    let show_peek = app.task.is_some() && !app.task_expanded;
+    use crate::app::TaskView;
+    // Task pane: a right column when peeking, a full overlay when expanded,
+    // nothing when hidden (even if a task is still running in the background).
+    let show_peek = app.task.is_some() && app.task_view == TaskView::Peek;
     let body = if show_peek {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -44,7 +45,7 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
     if show_peek {
         task_pane::draw_peek(frame, app, body[2]);
     }
-    if app.task_expanded {
+    if app.task.is_some() && app.task_view == TaskView::Expanded {
         task_pane::draw_overlay(frame, app, area);
     }
 

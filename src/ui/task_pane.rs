@@ -9,6 +9,8 @@ use tui_term::widget::PseudoTerminal;
 pub fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
     let Some(task) = &app.task else { return };
     let (title, color) = status_title(task);
+    let done = matches!(task.state, TaskState::Done { .. });
+    let hint = if done { "⏎ view · esc close" } else { "⏎ view · esc hide" };
     let last_line = task
         .parser
         .screen()
@@ -18,11 +20,7 @@ pub fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .to_string();
-    let body = format!(
-        "{}\n{}\n\n` expand / focus",
-        task.spec.targets.join(", "),
-        last_line
-    );
+    let body = format!("{}\n{}\n\n{}", task.spec.targets.join(", "), last_line, hint);
     let p = Paragraph::new(body).wrap(Wrap { trim: true }).block(
         Block::default()
             .borders(Borders::ALL)
@@ -35,11 +33,13 @@ pub fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
 pub fn draw_overlay(frame: &mut Frame, app: &App, area: Rect) {
     let Some(task) = &app.task else { return };
     let (title, color) = status_title(task);
+    let done = matches!(task.state, TaskState::Done { .. });
+    let hint = if done { "esc/q close" } else { "` peek · esc peek" };
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color))
-        .title(format!("{title}  ·  ` or esc to collapse"));
+        .title(format!("{title}  ·  {hint}"));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let term = PseudoTerminal::new(task.parser.screen());

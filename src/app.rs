@@ -26,6 +26,17 @@ pub enum SourceState {
     Error,
 }
 
+/// Visibility of the background-task (install) pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskView {
+    Hidden,
+    Peek,
+    Expanded,
+}
+
+/// Number of entries in the sidebar VIEWS list (Search / Installed / Updates).
+pub const VIEW_COUNT: usize = 3;
+
 pub struct App {
     pub query: String,
     pub query_id: u64,
@@ -43,7 +54,7 @@ pub struct App {
     pub sidebar_selected: usize,
     pub confirm: Option<ActionSpec>,
     pub task: Option<ActiveTask>,
-    pub task_expanded: bool,
+    pub task_view: TaskView,
     pub should_quit: bool,
 }
 
@@ -70,8 +81,76 @@ impl App {
             sidebar_selected: 0,
             confirm: None,
             task: None,
-            task_expanded: false,
+            task_view: TaskView::Hidden,
             should_quit: false,
+        }
+    }
+
+    /// Is the task pane currently on screen (peek or expanded)?
+    pub fn task_pane_visible(&self) -> bool {
+        self.task.is_some() && self.task_view != TaskView::Hidden
+    }
+
+    /// Panes that can hold focus right now, in Tab order.
+    fn visible_panes(&self) -> Vec<Focus> {
+        let mut panes = vec![Focus::Search, Focus::Sidebar, Focus::Main];
+        if self.task_pane_visible() {
+            panes.push(Focus::TaskPane);
+        }
+        panes
+    }
+
+    /// Horizontal body row (left → right), used for h/l / arrow movement.
+    fn body_panes(&self) -> Vec<Focus> {
+        let mut panes = vec![Focus::Sidebar, Focus::Main];
+        if self.task_pane_visible() {
+            panes.push(Focus::TaskPane);
+        }
+        panes
+    }
+
+    pub fn focus_next(&mut self) {
+        let panes = self.visible_panes();
+        let i = panes.iter().position(|f| *f == self.focus).unwrap_or(0);
+        self.focus = panes[(i + 1) % panes.len()];
+    }
+
+    pub fn focus_prev(&mut self) {
+        let panes = self.visible_panes();
+        let i = panes.iter().position(|f| *f == self.focus).unwrap_or(0);
+        self.focus = panes[(i + panes.len() - 1) % panes.len()];
+    }
+
+    pub fn focus_left(&mut self) {
+        let panes = self.body_panes();
+        match panes.iter().position(|f| *f == self.focus) {
+            Some(i) if i > 0 => self.focus = panes[i - 1],
+            None => self.focus = Focus::Main, // coming from Search
+            _ => {}
+        }
+    }
+
+    pub fn focus_right(&mut self) {
+        let panes = self.body_panes();
+        match panes.iter().position(|f| *f == self.focus) {
+            Some(i) if i + 1 < panes.len() => self.focus = panes[i + 1],
+            None => self.focus = Focus::Main, // coming from Search
+            _ => {}
+        }
+    }
+
+    pub fn move_sidebar(&mut self, delta: i32) {
+        let max = VIEW_COUNT as i32 - 1;
+        let next = (self.sidebar_selected as i32 + delta).clamp(0, max);
+        self.sidebar_selected = next as usize;
+    }
+
+    /// Drop the finished/aborted task and hide the pane.
+    pub fn dismiss_task(&mut self) {
+        self.task = None;
+        self.task_view = TaskView::Hidden;
+        if self.focus == Focus::TaskPane {
+            self.focus = Focus::Main;
         }
     }
 

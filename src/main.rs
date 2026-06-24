@@ -1,6 +1,9 @@
 // Many model fields/types are consumed by the TUI plan; allow during build-up.
 #![allow(dead_code)]
 
+mod action;
+mod app;
+mod event;
 mod model;
 mod search;
 mod sources;

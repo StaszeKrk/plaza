@@ -9,9 +9,10 @@ mod search;
 mod sources;
 mod ui;
 
+use crate::action::runner::{key_to_bytes, start_action, TaskState};
 use crate::app::{App, Focus};
 use crate::event::AppEvent;
-use crate::model::SourceId;
+use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
@@ -22,6 +23,7 @@ use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
@@ -121,7 +123,40 @@ fn handle_event(
         AppEvent::Stats(s) => app.stats = s,
         AppEvent::Updates(u) => app.updates = u,
         AppEvent::Installed(idx) => app.installed = idx,
+        AppEvent::PtyOutput(bytes) => {
+            if let Some(task) = &mut app.task {
+                task.parser.process(&bytes);
+                if !(app.focus == Focus::TaskPane && app.task_expanded) {
+                    task.has_unseen_output = true;
+                }
+            }
+        }
+        AppEvent::ActionFinished { success, code } => {
+            if let Some(task) = &mut app.task {
+                task.state = TaskState::Done { success, code };
+            }
+            // Refresh stats + installed index after a completed action.
+            spawn_stats_tasks(tx.clone());
+        }
         _ => {}
+    }
+}
+
+fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
+    let Some(spec) = app.confirm.take() else { return };
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    // leave a small margin for the overlay border
+    let rows = rows.saturating_sub(4).max(10);
+    let cols = cols.saturating_sub(4).max(40);
+    match start_action(spec, rows, cols, tx.clone()) {
+        Ok(task) => {
+            app.task = Some(task);
+            app.task_expanded = true;
+            app.focus = Focus::TaskPane;
+        }
+        Err(e) => {
+            eprintln!("plaza: failed to start install: {e}");
+        }
     }
 }
 
@@ -220,11 +255,60 @@ fn schedule_debounced_search(app: &mut App, tx: &UnboundedSender<AppEvent>) {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
+    // Ctrl-C always quits.
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.should_quit = true;
         return;
     }
 
+    // 1) Confirm modal captures input first.
+    if app.confirm.is_some() {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => begin_install(app, tx),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                app.confirm = None;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // 2) Backtick toggles the task pane from anywhere (if a task exists).
+    if key.code == KeyCode::Char('`') {
+        if app.task.is_some() {
+            app.task_expanded = !app.task_expanded;
+            if app.task_expanded {
+                app.focus = Focus::TaskPane;
+                if let Some(t) = &mut app.task {
+                    t.has_unseen_output = false;
+                }
+            } else {
+                app.focus = Focus::Main;
+            }
+        }
+        return;
+    }
+
+    // 3) When the task pane is focused+expanded, forward input to the child.
+    if app.focus == Focus::TaskPane && app.task_expanded {
+        match key.code {
+            KeyCode::Esc => {
+                app.task_expanded = false;
+                app.focus = Focus::Main;
+            }
+            _ => {
+                if let Some(task) = &mut app.task {
+                    if let Some(bytes) = key_to_bytes(key) {
+                        let _ = task.writer.write_all(&bytes);
+                        let _ = task.writer.flush();
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // 4) Search bar focused.
     if app.focus == Focus::Search {
         match key.code {
             KeyCode::Char(c) => {
@@ -241,11 +325,24 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
+    // 5) Browsing (Main focus). `q` guard: don't quit during a running install.
     use crate::app::MainView;
+    if key.code == KeyCode::Char('q') {
+        if running_task(app) {
+            app.task_expanded = true;
+            app.focus = Focus::TaskPane;
+        } else {
+            app.should_quit = true;
+        }
+        return;
+    }
+    if key.code == KeyCode::Char('/') {
+        app.focus = Focus::Search;
+        return;
+    }
+
     match app.main_view {
         MainView::Results => match key.code {
-            KeyCode::Char('/') => app.focus = Focus::Search,
-            KeyCode::Char('q') => app.should_quit = true,
             KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
             KeyCode::Enter => {
@@ -257,8 +354,6 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
             _ => {}
         },
         MainView::Detail => match key.code {
-            KeyCode::Char('/') => app.focus = Focus::Search,
-            KeyCode::Char('q') => app.should_quit = true,
             KeyCode::Esc => app.main_view = MainView::Results,
             KeyCode::Char('j') | KeyCode::Down => {
                 let n = app.selected_row().map(|r| r.providers.len()).unwrap_or(0);
@@ -269,10 +364,44 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
             KeyCode::Char('k') | KeyCode::Up => {
                 app.detail_selected = app.detail_selected.saturating_sub(1);
             }
-            // Enter (install) is wired in Task 8.
+            KeyCode::Enter => request_install(app),
             _ => {}
         },
     }
+}
+
+fn running_task(app: &App) -> bool {
+    matches!(app.task.as_ref().map(|t| &t.state), Some(TaskState::Running))
+}
+
+/// Build an ActionSpec for the selected provider and open the confirm modal.
+/// Refuses if an install is already running (one at a time in v1).
+fn request_install(app: &mut App) {
+    if running_task(app) {
+        app.task_expanded = true;
+        app.focus = Focus::TaskPane;
+        return;
+    }
+    let Some(row) = app.selected_row() else { return };
+    let Some(provider) = row.providers.get(app.detail_selected) else { return };
+    let source_id = provider.source_id;
+    let name = row.name.clone();
+    let command = match source_id {
+        SourceId::Pacman => crate::model::CommandLine {
+            program: "sudo".into(),
+            args: vec!["pacman".into(), "-S".into(), name.clone()],
+        },
+        SourceId::Aur => crate::model::CommandLine {
+            program: "yay".into(),
+            args: vec!["-S".into(), name.clone()],
+        },
+    };
+    app.confirm = Some(ActionSpec {
+        targets: vec![name],
+        source_id,
+        action: Action::Install,
+        command,
+    });
 }
 
 // --- core --search CLI ---

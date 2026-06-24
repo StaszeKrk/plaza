@@ -11,7 +11,7 @@ mod sources;
 mod ui;
 
 use crate::action::runner::{key_to_bytes, start_action, TaskState};
-use crate::app::{App, Focus, MainView, TaskView};
+use crate::app::{ActiveView, App, Focus, MainView, TaskView};
 use crate::event::AppEvent;
 use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
@@ -153,6 +153,18 @@ fn handle_event(
         AppEvent::Stats(s) => app.stats = s,
         AppEvent::Updates(u) => app.updates = u,
         AppEvent::Installed(idx) => app.installed = idx,
+        AppEvent::InstalledList(list) => {
+            app.installed_list = list;
+            app.installed_selected = app
+                .installed_selected
+                .min(app.installed_list.len().saturating_sub(1));
+        }
+        AppEvent::UpdatesList(list) => {
+            app.updates_list = list;
+            app.updates_selected = app
+                .updates_selected
+                .min(app.updates_list.len().saturating_sub(1));
+        }
         AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
             if let Some(task) = &mut app.task {
@@ -228,11 +240,33 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
         }
     });
 
-    // best-effort update counts
+    // explicitly-installed list for the Installed view
+    let tx_list = tx.clone();
     tokio::spawn(async move {
-        let repo = repo_update_count().await;
-        let aur = aur_update_count().await;
+        if let Ok(out) = Command::new("pacman").arg("-Qe").output().await {
+            let list = sources::installed::parse_explicit_list(&String::from_utf8_lossy(&out.stdout));
+            let _ = tx_list.send(AppEvent::InstalledList(list));
+        }
+    });
+
+    // best-effort update counts + list (repos and AUR)
+    tokio::spawn(async move {
+        let repo_text = repo_update_text().await;
+        let aur_text = aur_update_text().await;
+        let repo = repo_text
+            .as_deref()
+            .map(sources::updates::parse_update_count);
+        let aur = aur_text.as_deref().map(sources::updates::parse_update_count);
         let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo { repo, aur }));
+
+        let mut list = Vec::new();
+        if let Some(t) = &repo_text {
+            list.extend(sources::updates::parse_update_list(t));
+        }
+        if let Some(t) = &aur_text {
+            list.extend(sources::updates::parse_update_list(t));
+        }
+        let _ = tx.send(AppEvent::UpdatesList(list));
     });
 }
 
@@ -267,31 +301,27 @@ async fn run_count(args: &[&str]) -> usize {
     }
 }
 
-async fn repo_update_count() -> Option<usize> {
-    // Prefer `checkupdates` (safe, no root); fall back to `pacman -Qu`.
+/// Raw repo-update output (`name old -> new` lines). Prefers `checkupdates`
+/// (safe, no root); falls back to `pacman -Qu`. None if neither runs.
+async fn repo_update_text() -> Option<String> {
     if sources::which("checkupdates") {
         if let Ok(out) = Command::new("checkupdates").output().await {
-            return Some(sources::updates::parse_update_count(
-                &String::from_utf8_lossy(&out.stdout),
-            ));
+            return Some(String::from_utf8_lossy(&out.stdout).into_owned());
         }
     }
     match Command::new("pacman").arg("-Qu").output().await {
-        Ok(out) => Some(sources::updates::parse_update_count(
-            &String::from_utf8_lossy(&out.stdout),
-        )),
+        Ok(out) => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
         Err(_) => None,
     }
 }
 
-async fn aur_update_count() -> Option<usize> {
+/// Raw AUR-update output from `yay -Qua`, or None when yay is absent.
+async fn aur_update_text() -> Option<String> {
     if !sources::which("yay") {
         return None;
     }
     match Command::new("yay").arg("-Qua").output().await {
-        Ok(out) => Some(sources::updates::parse_update_count(
-            &String::from_utf8_lossy(&out.stdout),
-        )),
+        Ok(out) => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
         Err(_) => None,
     }
 }
@@ -340,8 +370,17 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
 
     // Confirm modal next.
     if app.confirm.is_some() {
+        let is_remove = matches!(
+            app.confirm.as_ref().map(|s| s.action),
+            Some(Action::Remove { .. })
+        );
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => begin_install(app, tx),
+            // `r` upgrades a pending Remove to the deeper -Rns variant.
+            KeyCode::Char('r') | KeyCode::Char('R') if is_remove => {
+                promote_remove_recursive(app);
+                begin_install(app, tx);
+            }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.clear_confirm(),
             _ => {}
         }
@@ -518,46 +557,93 @@ fn handle_browse_key(app: &mut App, key: KeyEvent) {
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => app.move_sidebar(1),
-            // only "Search" (index 0) is wired in v1
-            KeyCode::Enter if app.sidebar_selected == 0 => app.focus = Focus::Search,
+            // Activate the highlighted view and jump into it. Search lands in the
+            // search bar; the list views focus the center area.
+            KeyCode::Enter => {
+                app.select_sidebar_view();
+                match app.active_view {
+                    ActiveView::Search => app.focus = Focus::Search,
+                    _ => app.focus = Focus::Main,
+                }
+            }
             _ => {}
         },
-        Focus::Main => match app.main_view {
-            MainView::Results => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if app.results_selected == 0 {
-                        app.focus = Focus::Search;
-                    } else {
-                        app.move_selection(-1);
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
-                KeyCode::Enter if app.selected_row().is_some() => {
-                    app.detail_selected = 0;
-                    app.main_view = MainView::Detail;
-                }
+        Focus::Main => match app.active_view {
+            ActiveView::Search => handle_search_view_key(app, key),
+            ActiveView::Installed => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
+                KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
+                KeyCode::Enter if app.selected_installed().is_some() => request_remove(app),
                 _ => {}
             },
-            MainView::Detail => match key.code {
-                KeyCode::Esc => app.main_view = MainView::Results,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    app.detail_selected = app.detail_selected.saturating_sub(1);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let n = match app.selected_row() {
-                        Some(r) => app.effective_providers(r).len(),
-                        None => 0,
-                    };
-                    if n > 0 {
-                        app.detail_selected = (app.detail_selected + 1).min(n - 1);
-                    }
-                }
-                KeyCode::Enter => request_install(app),
+            ActiveView::Updates => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => app.move_updates(-1),
+                KeyCode::Down | KeyCode::Char('j') => app.move_updates(1),
+                KeyCode::Enter if !app.updates_list.is_empty() => request_upgrade(app),
                 _ => {}
             },
         },
         _ => {}
     }
+}
+
+/// Center-area key handling for the Search view (Results list ↔ Detail table).
+fn handle_search_view_key(app: &mut App, key: KeyEvent) {
+    match app.main_view {
+        MainView::Results => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if app.results_selected == 0 {
+                    app.focus = Focus::Search;
+                } else {
+                    app.move_selection(-1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+            KeyCode::Enter if app.selected_row().is_some() => {
+                app.detail_selected = 0;
+                app.main_view = MainView::Detail;
+            }
+            _ => {}
+        },
+        MainView::Detail => match key.code {
+            KeyCode::Esc => app.main_view = MainView::Results,
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.detail_selected = app.detail_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let n = match app.selected_row() {
+                    Some(r) => app.effective_providers(r).len(),
+                    None => 0,
+                };
+                if n > 0 {
+                    app.detail_selected = (app.detail_selected + 1).min(n - 1);
+                }
+            }
+            KeyCode::Enter => request_install(app),
+            _ => {}
+        },
+    }
+}
+
+/// Open the confirm modal to remove the selected installed package (plain `-R`).
+fn request_remove(app: &mut App) {
+    if let Some(spec) = app.remove_spec(false) {
+        app.confirm = Some(spec);
+        app.confirm_note = None;
+    }
+}
+
+/// Rebuild the pending Remove spec as the recursive `-Rns` form before running.
+fn promote_remove_recursive(app: &mut App) {
+    if let Some(spec) = app.remove_spec(true) {
+        app.confirm = Some(spec);
+    }
+}
+
+/// Open the confirm modal for the "upgrade everything" action.
+fn request_upgrade(app: &mut App) {
+    app.confirm = Some(app.upgrade_spec());
+    app.confirm_note = None;
 }
 
 /// Build an ActionSpec for the selected provider and open the confirm modal.

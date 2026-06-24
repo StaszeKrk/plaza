@@ -1,5 +1,6 @@
 use crate::model::{InstalledStats, PackageHit, SourceId, UpdatesInfo};
-use crate::sources::installed::InstalledIndex;
+use crate::sources::installed::{InstalledIndex, InstalledPkg};
+use crate::sources::updates::UpdateEntry;
 
 /// Everything the render loop reacts to.
 pub enum AppEvent {
@@ -17,6 +18,10 @@ pub enum AppEvent {
     Stats(InstalledStats),
     Updates(UpdatesInfo),
     Installed(InstalledIndex),
+    /// Explicitly-installed package list (`pacman -Qe`) for the Installed view.
+    InstalledList(Vec<InstalledPkg>),
+    /// Upgradable package list (repos + AUR) for the Updates view.
+    UpdatesList(Vec<UpdateEntry>),
     PtyOutput { id: u64, bytes: Vec<u8> },
     ActionFinished { id: u64, success: bool, code: u32 },
 }

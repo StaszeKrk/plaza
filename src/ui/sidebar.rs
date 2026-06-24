@@ -24,10 +24,20 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(span_bold("VIEWS")),
     ];
+    let active = app.active_view.index();
     for (i, v) in views.iter().enumerate() {
         let marker = if i == app.sidebar_selected && focused { "▸ " } else { "  " };
-        let suffix = if i == 0 { "" } else { " (soon)" };
-        lines.push(Line::from(format!("{marker}{v}{suffix}")));
+        // A dot marks the view the center area is currently showing.
+        let active_mark = if i == active { "•" } else { " " };
+        let style = if i == active {
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker}{active_mark}{v}"),
+            style,
+        )));
     }
 
     let p = Paragraph::new(lines).block(

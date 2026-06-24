@@ -59,16 +59,21 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::model::Action;
     let Some(spec) = &app.confirm else { return };
     let busy = matches!(
         app.task.as_ref().map(|t| &t.state),
         Some(crate::action::runner::TaskState::Running)
     );
     let cmd = format!("{} {}", spec.command.program, spec.command.args.join(" "));
-    let mut lines: Vec<String> = vec![
-        format!("Install {} from {}", spec.targets.join(", "), spec.source_id.badge()),
-        format!("via: {}", cmd),
-    ];
+    let headline = match spec.action {
+        Action::Install => {
+            format!("Install {} from {}", spec.targets.join(", "), spec.source_id.badge())
+        }
+        Action::Remove { .. } => format!("Remove {}", spec.targets.join(", ")),
+        Action::Upgrade => "Upgrade all packages".to_string(),
+    };
+    let mut lines: Vec<String> = vec![headline, format!("via: {}", cmd)];
     if let Some(note) = &app.confirm_note {
         lines.push(String::new());
         lines.push(note.clone());
@@ -76,23 +81,31 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
     if busy {
         if let Some(running) = &app.task {
             lines.push(format!(
-                "⚠ cancels the running install of {}",
+                "⚠ cancels the running {} of {}",
+                running.spec.action.verb(),
                 running.spec.targets.join(", ")
             ));
         }
     }
     lines.push(String::new());
-    lines.push("[y] confirm   [n/esc] cancel".to_string());
+    // For Remove, offer the deeper -Rns variant on a separate key.
+    if matches!(spec.action, Action::Remove { .. }) {
+        lines.push("[y] remove   [r] remove + deps & config (-Rns)   [n/esc] cancel".to_string());
+    } else {
+        lines.push("[y] confirm   [n/esc] cancel".to_string());
+    }
 
+    let title = format!(" confirm {} ", spec.action.verb());
     let height = lines.len() as u16 + 2; // + borders
-    let rect = centered_rect(66, height, area);
+    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16 + 4;
+    let rect = centered_rect(width.max(66), height, area);
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(lines.join("\n")).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow))
-                .title(" confirm install "),
+                .title(title),
         ),
         rect,
     );

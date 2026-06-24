@@ -345,11 +345,9 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         MainView::Results => match key.code {
             KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
-            KeyCode::Enter => {
-                if app.selected_row().is_some() {
-                    app.detail_selected = 0;
-                    app.main_view = MainView::Detail;
-                }
+            KeyCode::Enter if app.selected_row().is_some() => {
+                app.detail_selected = 0;
+                app.main_view = MainView::Detail;
             }
             _ => {}
         },

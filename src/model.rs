@@ -93,6 +93,48 @@ impl PackageRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Install,
+    /// Remove a package. `recursive` switches `-R` to `-Rns` (also drops
+    /// now-unneeded dependencies and config files).
+    Remove { recursive: bool },
+    /// Upgrade every installed package (repos, and the AUR when yay is present).
+    Upgrade,
+}
+
+impl Action {
+    /// The verb shown in the confirm modal title ("install", "remove", ...).
+    pub fn verb(self) -> &'static str {
+        match self {
+            Action::Install => "install",
+            Action::Remove { .. } => "remove",
+            Action::Upgrade => "upgrade",
+        }
+    }
+}
+
+/// Command that removes `name`. With `recursive`, uses `-Rns` to also drop
+/// now-unneeded dependencies and saved configuration; otherwise plain `-R`.
+pub fn remove_command(name: &str, recursive: bool) -> CommandLine {
+    let flag = if recursive { "-Rns" } else { "-R" };
+    CommandLine {
+        program: "sudo".into(),
+        args: vec!["pacman".into(), flag.into(), name.into()],
+    }
+}
+
+/// Command that upgrades everything. `yay -Syu` when yay is present (covers
+/// repos and the AUR), otherwise `sudo pacman -Syu` for repos only.
+pub fn upgrade_command(has_yay: bool) -> CommandLine {
+    if has_yay {
+        CommandLine {
+            program: "yay".into(),
+            args: vec!["-Syu".into()],
+        }
+    } else {
+        CommandLine {
+            program: "sudo".into(),
+            args: vec!["pacman".into(), "-Syu".into()],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +224,35 @@ mod tests {
         let cmd = aur.install_command("tty-clock");
         assert_eq!(cmd.program, "yay");
         assert_eq!(cmd.args, vec!["-S", "tty-clock"]);
+    }
+
+    #[test]
+    fn remove_command_default_and_recursive() {
+        let plain = remove_command("firefox", false);
+        assert_eq!(plain.program, "sudo");
+        assert_eq!(plain.args, vec!["pacman", "-R", "firefox"]);
+
+        let recursive = remove_command("firefox", true);
+        assert_eq!(recursive.args, vec!["pacman", "-Rns", "firefox"]);
+    }
+
+    #[test]
+    fn upgrade_command_prefers_yay() {
+        let with_yay = upgrade_command(true);
+        assert_eq!(with_yay.program, "yay");
+        assert_eq!(with_yay.args, vec!["-Syu"]);
+
+        let no_yay = upgrade_command(false);
+        assert_eq!(no_yay.program, "sudo");
+        assert_eq!(no_yay.args, vec!["pacman", "-Syu"]);
+    }
+
+    #[test]
+    fn action_verbs() {
+        assert_eq!(Action::Install.verb(), "install");
+        assert_eq!(Action::Remove { recursive: false }.verb(), "remove");
+        assert_eq!(Action::Remove { recursive: true }.verb(), "remove");
+        assert_eq!(Action::Upgrade.verb(), "upgrade");
     }
 
     #[test]

@@ -3,6 +3,7 @@ name = "plaza"
 version = "0.1.0"
 edition = "2021"
 description = "Cross-distro TUI package manager browser"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync"] }

@@ -33,6 +33,30 @@ pub fn count_lines(output: &str) -> usize {
     output.lines().filter(|l| !l.trim().is_empty()).count()
 }
 
+/// One explicitly-installed package, name and version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPkg {
+    pub name: String,
+    pub version: String,
+}
+
+/// Parse `pacman -Qe` output (`name version` per line) into a sorted list of
+/// explicitly-installed packages. `-Qe` already sorts by name; we keep it.
+pub fn parse_explicit_list(output: &str) -> Vec<InstalledPkg> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            let version = parts.next().unwrap_or_default();
+            Some(InstalledPkg {
+                name: name.to_string(),
+                version: version.to_string(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +75,16 @@ mod tests {
     fn count_lines_ignores_blanks() {
         assert_eq!(count_lines("a\nb\n\nc\n"), 3);
         assert_eq!(count_lines(""), 0);
+    }
+
+    #[test]
+    fn parses_explicit_list() {
+        let out = "firefox 141.0-1\nneovim 0.10.2-1\n\n";
+        let list = parse_explicit_list(out);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "firefox");
+        assert_eq!(list[0].version, "141.0-1");
+        assert_eq!(list[1].name, "neovim");
+        assert!(parse_explicit_list("").is_empty());
     }
 }

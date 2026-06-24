@@ -74,7 +74,6 @@ async fn run_tui() -> anyhow::Result<()> {
 
     spawn_input_task(tx.clone());
     spawn_stats_tasks(tx.clone());
-    spawn_repos_task(tx.clone());
 
     terminal.draw(|f| ui::draw(f, &app))?;
     while let Some(ev) = rx.recv().await {
@@ -136,7 +135,6 @@ fn handle_event(
         AppEvent::Stats(s) => app.stats = s,
         AppEvent::Updates(u) => app.updates = u,
         AppEvent::Installed(idx) => app.installed = idx,
-        AppEvent::Repos(repos) => app.repos = repos,
         AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
             if let Some(task) = &mut app.task {
@@ -217,20 +215,6 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
         let repo = repo_update_count().await;
         let aur = aur_update_count().await;
         let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo { repo, aur }));
-    });
-}
-
-/// Fetch the configured pacman repos (priority order) for the options panel.
-fn spawn_repos_task(tx: UnboundedSender<AppEvent>) {
-    tokio::spawn(async move {
-        if let Ok(out) = Command::new("pacman-conf").arg("--repo-list").output().await {
-            let repos: Vec<String> = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect();
-            let _ = tx.send(AppEvent::Repos(repos));
-        }
     });
 }
 
@@ -542,7 +526,7 @@ fn handle_browse_key(app: &mut App, key: KeyEvent) {
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let n = match app.selected_row() {
-                        Some(r) => app.visible_providers(r).len(),
+                        Some(r) => app.effective_providers(r).len(),
                         None => 0,
                     };
                     if n > 0 {
@@ -561,7 +545,7 @@ fn handle_browse_key(app: &mut App, key: KeyEvent) {
 /// If a task is still running, the confirm will note it gets cancelled.
 fn request_install(app: &mut App) {
     let Some(row) = app.selected_row() else { return };
-    let providers = app.visible_providers(row);
+    let providers = app.effective_providers(row);
     let Some(provider) = providers.get(app.detail_selected) else { return };
     let name = row.name.clone();
     let source_id = provider.source_id;

@@ -22,8 +22,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
     ]);
 
-    let providers = app.visible_providers(row);
-    // The first (visible) pacman provider is the highest-priority repo = default.
+    let providers = app.effective_providers(row);
+    // The first pacman provider is the highest-priority repo = default.
     let default_idx = providers
         .iter()
         .position(|p| p.source_id == crate::model::SourceId::Pacman);
@@ -50,7 +50,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             };
             ListItem::new(format!(
                 "{:<16} {:<14} {:<12} {}",
-                p.badge(),
+                app.provider_badge(p),
                 p.version,
                 inst,
                 notes

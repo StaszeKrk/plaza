@@ -7,15 +7,16 @@ use std::path::PathBuf;
 pub struct Settings {
     /// Show the keybinding hints in the status bar.
     pub show_hotkeys: bool,
-    /// Repo names whose providers are hidden from badges and the detail view.
-    pub hidden_repos: Vec<String>,
+    /// Collapse all pacman repos into a single `[official]` provider (using the
+    /// default/highest-priority repo) instead of showing each repo separately.
+    pub collapse_repos: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             show_hotkeys: true,
-            hidden_repos: Vec::new(),
+            collapse_repos: false,
         }
     }
 }
@@ -49,15 +50,4 @@ impl Settings {
         }
     }
 
-    pub fn is_repo_hidden(&self, repo: &str) -> bool {
-        self.hidden_repos.iter().any(|r| r == repo)
-    }
-
-    pub fn toggle_repo(&mut self, repo: &str) {
-        if let Some(i) = self.hidden_repos.iter().position(|r| r == repo) {
-            self.hidden_repos.remove(i);
-        } else {
-            self.hidden_repos.push(repo.to_string());
-        }
-    }
 }

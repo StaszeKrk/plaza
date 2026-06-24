@@ -59,7 +59,6 @@ pub struct App {
     pub task_view: TaskView,
     pub task_seq: u64,
     pub settings: Settings,
-    pub repos: Vec<String>,
     pub options_open: bool,
     pub options_selected: usize,
     pub should_quit: bool,
@@ -92,23 +91,37 @@ impl App {
             task_view: TaskView::Hidden,
             task_seq: 0,
             settings: Settings::load(),
-            repos: Vec::new(),
             options_open: false,
             options_selected: 0,
             should_quit: false,
         }
     }
 
-    /// Providers of `row` that aren't filtered out by hidden-repo settings.
-    /// (AUR is never hidden by a repo filter.)
-    pub fn visible_providers<'a>(&self, row: &'a PackageRow) -> Vec<&'a Provider> {
-        row.providers
-            .iter()
-            .filter(|p| match &p.meta.repo {
-                Some(repo) => !self.settings.is_repo_hidden(repo),
-                None => true,
-            })
-            .collect()
+    /// The providers to display/select for `row`. With `collapse_repos`, all
+    /// pacman repos collapse to just the default (highest-priority) one, plus
+    /// the AUR; otherwise every repo is listed in priority order.
+    pub fn effective_providers<'a>(&self, row: &'a PackageRow) -> Vec<&'a Provider> {
+        if self.settings.collapse_repos {
+            let mut out: Vec<&Provider> = Vec::new();
+            if let Some(p) = row.providers.iter().find(|p| p.source_id == SourceId::Pacman) {
+                out.push(p);
+            }
+            if let Some(p) = row.providers.iter().find(|p| p.source_id == SourceId::Aur) {
+                out.push(p);
+            }
+            out
+        } else {
+            row.providers.iter().collect()
+        }
+    }
+
+    /// Badge label for a provider, honoring `collapse_repos` (pacman → "official").
+    pub fn provider_badge<'a>(&self, p: &'a Provider) -> &'a str {
+        if self.settings.collapse_repos && p.source_id == SourceId::Pacman {
+            "official"
+        } else {
+            p.badge()
+        }
     }
 
     pub fn clear_confirm(&mut self) {
@@ -118,22 +131,20 @@ impl App {
 
     // --- Options overlay ---
 
-    /// Number of toggles: "show hotkeys" + one per known repo.
-    pub fn options_count(&self) -> usize {
-        1 + self.repos.len()
-    }
+    /// Number of option toggles.
+    pub const OPTIONS_COUNT: usize = 2;
 
     pub fn move_options(&mut self, delta: i32) {
-        let max = self.options_count() as i32 - 1;
-        let next = (self.options_selected as i32 + delta).clamp(0, max.max(0));
+        let max = Self::OPTIONS_COUNT as i32 - 1;
+        let next = (self.options_selected as i32 + delta).clamp(0, max);
         self.options_selected = next as usize;
     }
 
     pub fn toggle_option(&mut self) {
-        if self.options_selected == 0 {
-            self.settings.show_hotkeys = !self.settings.show_hotkeys;
-        } else if let Some(repo) = self.repos.get(self.options_selected - 1).cloned() {
-            self.settings.toggle_repo(&repo);
+        match self.options_selected {
+            0 => self.settings.show_hotkeys = !self.settings.show_hotkeys,
+            1 => self.settings.collapse_repos = !self.settings.collapse_repos,
+            _ => {}
         }
         self.settings.save();
     }

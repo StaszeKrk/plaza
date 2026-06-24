@@ -19,11 +19,13 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
         .rows
         .iter()
         .map(|row| {
-            let visible = app.visible_providers(row);
-            let badges: String = visible.iter().map(|p| format!("[{}]", p.badge())).collect();
+            let shown = app.effective_providers(row);
+            let badges: String = shown
+                .iter()
+                .map(|p| format!("[{}]", app.provider_badge(p)))
+                .collect();
             let installed = if row.any_installed() { " ✓" } else { "" };
-            // Version from the first visible provider, else the real default.
-            let ver = visible
+            let ver = shown
                 .first()
                 .map(|p| p.version.as_str())
                 .or_else(|| row.providers.first().map(|p| p.version.as_str()))

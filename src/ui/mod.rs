@@ -111,27 +111,21 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled(format!("{marker}{text}"), style))
     };
 
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(row(
-        sel == 0,
-        format!("{} Show hotkeys in status bar", check(app.settings.show_hotkeys)),
-    ));
-    if !app.repos.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Hide repos:",
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Gray),
-        )));
-        for (i, repo) in app.repos.iter().enumerate() {
-            let hidden = app.settings.is_repo_hidden(repo);
-            lines.push(row(sel == i + 1, format!("{} {}", check(hidden), repo)));
-        }
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  ↑↓ move · space toggle · esc close",
-        Style::default().fg(Color::DarkGray),
-    )));
+    let lines: Vec<Line> = vec![
+        row(
+            sel == 0,
+            format!("{} Show hotkeys in status bar", check(app.settings.show_hotkeys)),
+        ),
+        row(
+            sel == 1,
+            format!("{} Group repos as [official]", check(app.settings.collapse_repos)),
+        ),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  ↑↓ move · space toggle · esc close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = centered_rect(46, height, area);

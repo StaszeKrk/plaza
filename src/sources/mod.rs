@@ -1,6 +1,7 @@
 pub mod aur;
 pub mod installed;
 pub mod pacman;
+pub mod updates;
 
 use crate::model::{Action, CommandLine, PackageHit, SourceId};
 use async_trait::async_trait;

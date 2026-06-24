@@ -70,6 +70,7 @@ async fn run_tui() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
     spawn_input_task(tx.clone());
+    spawn_stats_tasks(tx.clone());
 
     terminal.draw(|f| ui::draw(f, &app))?;
     while let Some(ev) = rx.recv().await {
@@ -117,7 +118,70 @@ fn handle_event(
         AppEvent::SearchError { query_id, source_id } => {
             app.set_source_error(query_id, source_id);
         }
+        AppEvent::Stats(s) => app.stats = s,
+        AppEvent::Updates(u) => app.updates = u,
+        AppEvent::Installed(idx) => app.installed = idx,
         _ => {}
+    }
+}
+
+fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
+    // installed counts + index
+    let tx_inst = tx.clone();
+    tokio::spawn(async move {
+        let repo = run_count(&["-Qnq"]).await;
+        let foreign = run_count(&["-Qmq"]).await;
+        let _ = tx_inst.send(AppEvent::Stats(crate::model::InstalledStats { repo, foreign }));
+
+        if let Ok(out) = Command::new("pacman").arg("-Q").output().await {
+            let idx = sources::installed::InstalledIndex::from_query_output(
+                &String::from_utf8_lossy(&out.stdout),
+            );
+            let _ = tx_inst.send(AppEvent::Installed(idx));
+        }
+    });
+
+    // best-effort update counts
+    tokio::spawn(async move {
+        let repo = repo_update_count().await;
+        let aur = aur_update_count().await;
+        let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo { repo, aur }));
+    });
+}
+
+async fn run_count(args: &[&str]) -> usize {
+    match Command::new("pacman").args(args).output().await {
+        Ok(out) => sources::installed::count_lines(&String::from_utf8_lossy(&out.stdout)),
+        Err(_) => 0,
+    }
+}
+
+async fn repo_update_count() -> Option<usize> {
+    // Prefer `checkupdates` (safe, no root); fall back to `pacman -Qu`.
+    if sources::which("checkupdates") {
+        if let Ok(out) = Command::new("checkupdates").output().await {
+            return Some(sources::updates::parse_update_count(
+                &String::from_utf8_lossy(&out.stdout),
+            ));
+        }
+    }
+    match Command::new("pacman").arg("-Qu").output().await {
+        Ok(out) => Some(sources::updates::parse_update_count(
+            &String::from_utf8_lossy(&out.stdout),
+        )),
+        Err(_) => None,
+    }
+}
+
+async fn aur_update_count() -> Option<usize> {
+    if !sources::which("yay") {
+        return None;
+    }
+    match Command::new("yay").arg("-Qua").output().await {
+        Ok(out) => Some(sources::updates::parse_update_count(
+            &String::from_utf8_lossy(&out.stdout),
+        )),
+        Err(_) => None,
     }
 }
 

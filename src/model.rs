@@ -39,6 +39,17 @@ pub struct Provider {
     pub meta: SourceMeta,
 }
 
+impl Provider {
+    /// Short label for this provider: the concrete pacman repo name
+    /// (e.g. "world", "extra-x86-64-v3") or "aur".
+    pub fn badge(&self) -> &str {
+        match self.source_id {
+            SourceId::Pacman => self.meta.repo.as_deref().unwrap_or("repo"),
+            SourceId::Aur => "aur",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackageRow {
     pub name: String,

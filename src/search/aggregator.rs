@@ -24,7 +24,13 @@ pub fn merge(hits: Vec<PackageHit>, installed: &InstalledIndex) -> Vec<PackageRo
         if row.best_description.is_empty() && !hit.description.is_empty() {
             row.best_description = hit.description.clone();
         }
-        if !row.providers.iter().any(|p| p.source_id == provider.source_id) {
+        // Dedup per (source, repo) so a package in several pacman repos keeps a
+        // provider for each (world, extra-x86-64-v3, extra, …), in priority order.
+        let dup = row
+            .providers
+            .iter()
+            .any(|p| p.source_id == provider.source_id && p.meta.repo == provider.meta.repo);
+        if !dup {
             row.providers.push(provider);
         }
     }
@@ -105,6 +111,36 @@ mod tests {
 
         assert_eq!(rows[1].name, "firefox-bin");
         assert!(!rows[1].any_installed());
+    }
+
+    fn hit_repo(name: &str, ver: &str, repo: &str) -> PackageHit {
+        PackageHit {
+            name: name.into(),
+            version: ver.into(),
+            source_id: SourceId::Pacman,
+            description: String::new(),
+            meta: SourceMeta {
+                repo: Some(repo.into()),
+                maintained: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn keeps_one_provider_per_pacman_repo_in_priority_order() {
+        let hits = vec![
+            hit_repo("neovim", "0.12.3-1", "world"),
+            hit_repo("neovim", "0.12.3-1.1", "extra-x86-64-v3"),
+            hit_repo("neovim", "0.12.3-1", "extra"),
+        ];
+        let idx = InstalledIndex::default();
+        let rows = merge(hits, &idx);
+        assert_eq!(rows.len(), 1);
+        let badges: Vec<&str> = rows[0].providers.iter().map(|p| p.badge()).collect();
+        assert_eq!(badges, vec!["world", "extra-x86-64-v3", "extra"]);
+        // First provider is the highest-priority repo (what pacman installs).
+        assert_eq!(rows[0].providers[0].version, "0.12.3-1");
     }
 
     #[test]

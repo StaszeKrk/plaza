@@ -19,7 +19,7 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
         .rows
         .iter()
         .map(|row| {
-            let badges: Vec<&str> = row.providers.iter().map(|p| p.source_id.badge()).collect();
+            let badges: String = row.providers.iter().map(|p| format!("[{}]", p.badge())).collect();
             let installed = if row.any_installed() { " ✓" } else { "" };
             let ver = row
                 .providers
@@ -27,9 +27,9 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
                 .map(|p| p.version.as_str())
                 .unwrap_or("");
             ListItem::new(format!(
-                "{:<30} [{}] {}{}",
-                truncate(&row.name, 30),
-                badges.join(","),
+                "{:<28} {} {}{}",
+                truncate(&row.name, 28),
+                badges,
                 ver,
                 installed
             ))

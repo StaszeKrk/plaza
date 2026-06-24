@@ -439,7 +439,7 @@ async fn run_search_cli(term: &str) -> anyhow::Result<()> {
     let mut rows = merge(all_hits, &idx);
     relevance_sort(term, &mut rows);
     for row in &rows {
-        let badges: Vec<&str> = row.providers.iter().map(|p| p.source_id.badge()).collect();
+        let badges: Vec<&str> = row.providers.iter().map(|p| p.badge()).collect();
         let installed = if row.any_installed() { " [installed]" } else { "" };
         println!("{:<35} [{}]{}", row.name, badges.join(","), installed);
     }

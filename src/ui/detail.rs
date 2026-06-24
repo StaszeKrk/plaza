@@ -22,10 +22,17 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
     ]);
 
+    // The first pacman provider is the highest-priority repo = what installs.
+    let install_idx = row
+        .providers
+        .iter()
+        .position(|p| p.source_id == crate::model::SourceId::Pacman);
+
     let items: Vec<ListItem> = row
         .providers
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(i, p)| {
             let inst = if p.installed {
                 format!("✓ {}", p.installed_version.as_deref().unwrap_or(""))
             } else {
@@ -35,14 +42,16 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 let m = if p.meta.maintained { "maintained" } else { "orphaned" };
                 let ood = if p.meta.out_of_date { " · out-of-date" } else { "" };
                 format!("{votes} votes · {m}{ood}")
-            } else if let Some(repo) = &p.meta.repo {
-                format!("official · {repo}")
+            } else if Some(i) == install_idx {
+                "official · installs".to_string()
+            } else if p.meta.repo.is_some() {
+                "official".to_string()
             } else {
                 String::new()
             };
             ListItem::new(format!(
-                "{:<6} {:<14} {:<12} {}",
-                p.source_id.badge(),
+                "{:<16} {:<14} {:<12} {}",
+                p.badge(),
                 p.version,
                 inst,
                 notes

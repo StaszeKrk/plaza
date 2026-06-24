@@ -1,6 +1,7 @@
 use crate::app::App;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
@@ -52,38 +53,95 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
     if app.confirm.is_some() {
         draw_confirm(frame, app, area);
     }
+    if app.options_open {
+        draw_options(frame, app, area);
+    }
 }
 
 fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
     let Some(spec) = &app.confirm else { return };
-    // Warn if confirming will cancel an install that is still running.
     let busy = matches!(
         app.task.as_ref().map(|t| &t.state),
         Some(crate::action::runner::TaskState::Running)
     );
-    let height = if busy { 8 } else { 7 };
-    let rect = centered_rect(62, height, area);
     let cmd = format!("{} {}", spec.command.program, spec.command.args.join(" "));
-    let mut text = format!(
-        "Install {} from {}\nvia: {}\n",
-        spec.targets.join(", "),
-        spec.source_id.badge(),
-        cmd
-    );
-    if let Some(running) = app.task.as_ref().filter(|_| busy) {
-        text.push_str(&format!(
-            "\n⚠ cancels the running install of {}\n",
-            running.spec.targets.join(", ")
-        ));
+    let mut lines: Vec<String> = vec![
+        format!("Install {} from {}", spec.targets.join(", "), spec.source_id.badge()),
+        format!("via: {}", cmd),
+    ];
+    if let Some(note) = &app.confirm_note {
+        lines.push(String::new());
+        lines.push(note.clone());
     }
-    text.push_str("\n[y] confirm   [n/esc] cancel");
+    if busy {
+        if let Some(running) = &app.task {
+            lines.push(format!(
+                "⚠ cancels the running install of {}",
+                running.spec.targets.join(", ")
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("[y] confirm   [n/esc] cancel".to_string());
+
+    let height = lines.len() as u16 + 2; // + borders
+    let rect = centered_rect(66, height, area);
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(text).block(
+        Paragraph::new(lines.join("\n")).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow))
                 .title(" confirm install "),
+        ),
+        rect,
+    );
+}
+
+fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
+    let sel = app.options_selected;
+    let check = |b: bool| if b { "[x]" } else { "[ ]" };
+    let row = |selected: bool, text: String| -> Line<'static> {
+        let marker = if selected { "▸ " } else { "  " };
+        let style = if selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        Line::from(Span::styled(format!("{marker}{text}"), style))
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(row(
+        sel == 0,
+        format!("{} Show hotkeys in status bar", check(app.settings.show_hotkeys)),
+    ));
+    if !app.repos.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Hide repos:",
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Gray),
+        )));
+        for (i, repo) in app.repos.iter().enumerate() {
+            let hidden = app.settings.is_repo_hidden(repo);
+            lines.push(row(sel == i + 1, format!("{} {}", check(hidden), repo)));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ↑↓ move · space toggle · esc close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = centered_rect(46, height, area);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Options "),
         ),
         rect,
     );

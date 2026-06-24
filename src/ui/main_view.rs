@@ -19,12 +19,14 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
         .rows
         .iter()
         .map(|row| {
-            let badges: String = row.providers.iter().map(|p| format!("[{}]", p.badge())).collect();
+            let visible = app.visible_providers(row);
+            let badges: String = visible.iter().map(|p| format!("[{}]", p.badge())).collect();
             let installed = if row.any_installed() { " ✓" } else { "" };
-            let ver = row
-                .providers
+            // Version from the first visible provider, else the real default.
+            let ver = visible
                 .first()
                 .map(|p| p.version.as_str())
+                .or_else(|| row.providers.first().map(|p| p.version.as_str()))
                 .unwrap_or("");
             ListItem::new(format!(
                 "{:<28} {} {}{}",

@@ -22,14 +22,13 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
     ]);
 
-    // The first pacman provider is the highest-priority repo = what installs.
-    let install_idx = row
-        .providers
+    let providers = app.visible_providers(row);
+    // The first (visible) pacman provider is the highest-priority repo = default.
+    let default_idx = providers
         .iter()
         .position(|p| p.source_id == crate::model::SourceId::Pacman);
 
-    let items: Vec<ListItem> = row
-        .providers
+    let items: Vec<ListItem> = providers
         .iter()
         .enumerate()
         .map(|(i, p)| {
@@ -42,8 +41,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 let m = if p.meta.maintained { "maintained" } else { "orphaned" };
                 let ood = if p.meta.out_of_date { " · out-of-date" } else { "" };
                 format!("{votes} votes · {m}{ood}")
-            } else if Some(i) == install_idx {
-                "official · installs".to_string()
+            } else if Some(i) == default_idx {
+                "official · default".to_string()
             } else if p.meta.repo.is_some() {
                 "official".to_string()
             } else {
@@ -79,8 +78,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▸ ");
     let mut state = ListState::default();
-    if !row.providers.is_empty() {
-        state.select(Some(app.detail_selected.min(row.providers.len() - 1)));
+    if !providers.is_empty() {
+        state.select(Some(app.detail_selected.min(providers.len() - 1)));
     }
     frame.render_stateful_widget(list, chunks[1], &mut state);
 }

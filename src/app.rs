@@ -1,6 +1,7 @@
 use crate::action::runner::ActiveTask;
+use crate::config::Settings;
 use crate::model::{
-    ActionSpec, InstalledStats, PackageHit, PackageRow, SourceId, UpdatesInfo,
+    ActionSpec, InstalledStats, PackageHit, PackageRow, Provider, SourceId, UpdatesInfo,
 };
 use crate::search::aggregator::{merge, relevance_sort};
 use crate::sources::installed::InstalledIndex;
@@ -53,9 +54,14 @@ pub struct App {
     pub detail_selected: usize,
     pub sidebar_selected: usize,
     pub confirm: Option<ActionSpec>,
+    pub confirm_note: Option<String>,
     pub task: Option<ActiveTask>,
     pub task_view: TaskView,
     pub task_seq: u64,
+    pub settings: Settings,
+    pub repos: Vec<String>,
+    pub options_open: bool,
+    pub options_selected: usize,
     pub should_quit: bool,
 }
 
@@ -81,11 +87,55 @@ impl App {
             detail_selected: 0,
             sidebar_selected: 0,
             confirm: None,
+            confirm_note: None,
             task: None,
             task_view: TaskView::Hidden,
             task_seq: 0,
+            settings: Settings::load(),
+            repos: Vec::new(),
+            options_open: false,
+            options_selected: 0,
             should_quit: false,
         }
+    }
+
+    /// Providers of `row` that aren't filtered out by hidden-repo settings.
+    /// (AUR is never hidden by a repo filter.)
+    pub fn visible_providers<'a>(&self, row: &'a PackageRow) -> Vec<&'a Provider> {
+        row.providers
+            .iter()
+            .filter(|p| match &p.meta.repo {
+                Some(repo) => !self.settings.is_repo_hidden(repo),
+                None => true,
+            })
+            .collect()
+    }
+
+    pub fn clear_confirm(&mut self) {
+        self.confirm = None;
+        self.confirm_note = None;
+    }
+
+    // --- Options overlay ---
+
+    /// Number of toggles: "show hotkeys" + one per known repo.
+    pub fn options_count(&self) -> usize {
+        1 + self.repos.len()
+    }
+
+    pub fn move_options(&mut self, delta: i32) {
+        let max = self.options_count() as i32 - 1;
+        let next = (self.options_selected as i32 + delta).clamp(0, max.max(0));
+        self.options_selected = next as usize;
+    }
+
+    pub fn toggle_option(&mut self) {
+        if self.options_selected == 0 {
+            self.settings.show_hotkeys = !self.settings.show_hotkeys;
+        } else if let Some(repo) = self.repos.get(self.options_selected - 1).cloned() {
+            self.settings.toggle_repo(&repo);
+        }
+        self.settings.save();
     }
 
     /// Is the task pane currently on screen (peek or expanded)?

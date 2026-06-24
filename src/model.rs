@@ -19,6 +19,8 @@ pub struct SourceMeta {
     pub maintained: bool,
     pub out_of_date: bool,
     pub repo: Option<String>,
+    /// AUR `LastModified` (unix seconds): when the package (PKGBUILD) last changed.
+    pub last_modified: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +48,28 @@ impl Provider {
         match self.source_id {
             SourceId::Pacman => self.meta.repo.as_deref().unwrap_or("repo"),
             SourceId::Aur => "aur",
+        }
+    }
+
+    /// The command that installs `name` specifically from THIS provider.
+    /// Pacman targets are repo-qualified (`repo/pkg`) so a non-default repo can
+    /// be chosen; the AUR goes through yay.
+    pub fn install_command(&self, name: &str) -> CommandLine {
+        match self.source_id {
+            SourceId::Pacman => {
+                let target = match &self.meta.repo {
+                    Some(repo) => format!("{repo}/{name}"),
+                    None => name.to_string(),
+                };
+                CommandLine {
+                    program: "sudo".into(),
+                    args: vec!["pacman".into(), "-S".into(), target],
+                }
+            }
+            SourceId::Aur => CommandLine {
+                program: "yay".into(),
+                args: vec!["-S".into(), name.into()],
+            },
         }
     }
 }
@@ -103,6 +127,11 @@ pub struct UpdatesInfo {
     pub aur: Option<usize>,
 }
 
+/// Whole days between `ts` and `now` (unix seconds), clamped at 0.
+pub fn days_ago(ts: i64, now: i64) -> i64 {
+    (now - ts).max(0) / 86_400
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,9 +143,45 @@ mod tests {
     }
 
     #[test]
+    fn days_ago_basic() {
+        let now = 1_700_000_000;
+        assert_eq!(days_ago(now - 3 * 86_400, now), 3);
+        assert_eq!(days_ago(now, now), 0);
+        assert_eq!(days_ago(now + 86_400, now), 0); // future clamps to 0
+    }
+
+    #[test]
     fn installed_stats_total() {
         let s = InstalledStats { repo: 1208, foreign: 77 };
         assert_eq!(s.total(), 1285);
+    }
+
+    #[test]
+    fn install_command_qualifies_pacman_repo() {
+        let p = Provider {
+            source_id: SourceId::Pacman,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            meta: SourceMeta {
+                repo: Some("extra-x86-64-v3".into()),
+                ..Default::default()
+            },
+        };
+        let cmd = p.install_command("neovim");
+        assert_eq!(cmd.program, "sudo");
+        assert_eq!(cmd.args, vec!["pacman", "-S", "extra-x86-64-v3/neovim"]);
+
+        let aur = Provider {
+            source_id: SourceId::Aur,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            meta: SourceMeta::default(),
+        };
+        let cmd = aur.install_command("tty-clock");
+        assert_eq!(cmd.program, "yay");
+        assert_eq!(cmd.args, vec!["-S", "tty-clock"]);
     }
 
     #[test]

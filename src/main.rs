@@ -3,6 +3,7 @@
 
 mod action;
 mod app;
+mod config;
 mod event;
 mod model;
 mod search;
@@ -73,6 +74,7 @@ async fn run_tui() -> anyhow::Result<()> {
 
     spawn_input_task(tx.clone());
     spawn_stats_tasks(tx.clone());
+    spawn_repos_task(tx.clone());
 
     terminal.draw(|f| ui::draw(f, &app))?;
     while let Some(ev) = rx.recv().await {
@@ -134,6 +136,7 @@ fn handle_event(
         AppEvent::Stats(s) => app.stats = s,
         AppEvent::Updates(u) => app.updates = u,
         AppEvent::Installed(idx) => app.installed = idx,
+        AppEvent::Repos(repos) => app.repos = repos,
         AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
             if let Some(task) = &mut app.task {
@@ -173,6 +176,7 @@ fn expanded_pty_size(term_cols: u16, term_rows: u16) -> (u16, u16) {
 
 fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     let Some(spec) = app.confirm.take() else { return };
+    app.confirm_note = None;
     // Cancel/replace any prior task: dropping it closes the PTY, so an abandoned
     // child (e.g. one still waiting at the sudo prompt) gets a hangup and exits.
     app.task = None;
@@ -214,6 +218,44 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
         let aur = aur_update_count().await;
         let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo { repo, aur }));
     });
+}
+
+/// Fetch the configured pacman repos (priority order) for the options panel.
+fn spawn_repos_task(tx: UnboundedSender<AppEvent>) {
+    tokio::spawn(async move {
+        if let Ok(out) = Command::new("pacman-conf").arg("--repo-list").output().await {
+            let repos: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            let _ = tx.send(AppEvent::Repos(repos));
+        }
+    });
+}
+
+const RECENT_AUR_DAYS: i64 = 7;
+
+/// Warn if a selected AUR provider's PKGBUILD changed within the recency window
+/// (the AUR has seen malware pushed via edited PKGBUILDs).
+fn aur_recency_note(provider: &model::Provider) -> Option<String> {
+    if provider.source_id != SourceId::Aur {
+        return None;
+    }
+    let lm = provider.meta.last_modified?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let days = model::days_ago(lm, now);
+    if days <= RECENT_AUR_DAYS {
+        let when = if days == 0 { "today".to_string() } else { format!("{days}d ago") };
+        Some(format!(
+            "⚠ AUR PKGBUILD changed {when} — review it before installing"
+        ))
+    } else {
+        None
+    }
 }
 
 async fn run_count(args: &[&str]) -> usize {
@@ -287,11 +329,17 @@ fn schedule_debounced_search(app: &mut App, tx: &UnboundedSender<AppEvent>) {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
-    // Confirm modal captures input first.
+    // Options overlay captures input first.
+    if app.options_open {
+        handle_options_key(app, key);
+        return;
+    }
+
+    // Confirm modal next.
     if app.confirm.is_some() {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => begin_install(app, tx),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.confirm = None,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.clear_confirm(),
             _ => {}
         }
         return;
@@ -410,6 +458,16 @@ fn handle_task_pane_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn handle_options_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('o') => app.options_open = false,
+        KeyCode::Up | KeyCode::Char('k') => app.move_options(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_options(1),
+        KeyCode::Char(' ') | KeyCode::Enter => app.toggle_option(),
+        _ => {}
+    }
+}
+
 fn handle_search_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     match key.code {
         KeyCode::Char(c) => {
@@ -431,6 +489,11 @@ fn handle_browse_key(app: &mut App, key: KeyEvent) {
     // Keys shared by the sidebar and main panes.
     match key.code {
         KeyCode::Char('q') => return try_quit(app),
+        KeyCode::Char('o') => {
+            app.options_open = true;
+            app.options_selected = 0;
+            return;
+        }
         KeyCode::Char('/') => {
             app.focus = Focus::Search;
             return;
@@ -478,7 +541,10 @@ fn handle_browse_key(app: &mut App, key: KeyEvent) {
                     app.detail_selected = app.detail_selected.saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    let n = app.selected_row().map(|r| r.providers.len()).unwrap_or(0);
+                    let n = match app.selected_row() {
+                        Some(r) => app.visible_providers(r).len(),
+                        None => 0,
+                    };
                     if n > 0 {
                         app.detail_selected = (app.detail_selected + 1).min(n - 1);
                     }
@@ -495,25 +561,19 @@ fn handle_browse_key(app: &mut App, key: KeyEvent) {
 /// If a task is still running, the confirm will note it gets cancelled.
 fn request_install(app: &mut App) {
     let Some(row) = app.selected_row() else { return };
-    let Some(provider) = row.providers.get(app.detail_selected) else { return };
-    let source_id = provider.source_id;
+    let providers = app.visible_providers(row);
+    let Some(provider) = providers.get(app.detail_selected) else { return };
     let name = row.name.clone();
-    let command = match source_id {
-        SourceId::Pacman => crate::model::CommandLine {
-            program: "sudo".into(),
-            args: vec!["pacman".into(), "-S".into(), name.clone()],
-        },
-        SourceId::Aur => crate::model::CommandLine {
-            program: "yay".into(),
-            args: vec!["-S".into(), name.clone()],
-        },
-    };
+    let source_id = provider.source_id;
+    let command = provider.install_command(&name);
+    let note = aur_recency_note(provider);
     app.confirm = Some(ActionSpec {
         targets: vec![name],
         source_id,
         action: Action::Install,
         command,
     });
+    app.confirm_note = note;
 }
 
 // --- core --search CLI ---

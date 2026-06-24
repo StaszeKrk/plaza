@@ -17,6 +17,7 @@ pub enum AppEvent {
     Stats(InstalledStats),
     Updates(UpdatesInfo),
     Installed(InstalledIndex),
+    Repos(Vec<String>),
     PtyOutput { id: u64, bytes: Vec<u8> },
     ActionFinished { id: u64, success: bool, code: u32 },
 }

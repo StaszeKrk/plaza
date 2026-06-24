@@ -32,12 +32,14 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         parts.push(indicator);
     }
 
-    let keys = match (app.focus, app.main_view) {
-        (Focus::Search, _) => "type to search  ⏎/esc list",
-        (_, MainView::Results) => "↑↓ move  ⏎ open  / search  q quit",
-        (_, MainView::Detail) => "↑↓ source  ⏎ install  esc back  / search",
-    };
-    parts.push(keys.to_string());
+    if app.settings.show_hotkeys {
+        let keys = match (app.focus, app.main_view) {
+            (Focus::Search, _) => "type to search  ⏎/esc list",
+            (_, MainView::Results) => "↑↓ move  ⏎ open  / search  o options  q quit",
+            (_, MainView::Detail) => "↑↓ source  ⏎ install  esc back  o options",
+        };
+        parts.push(keys.to_string());
+    }
 
     let line = format!(" {} ", parts.join("   "));
     frame.render_widget(

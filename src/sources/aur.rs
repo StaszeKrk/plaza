@@ -60,6 +60,8 @@ struct RpcResult {
     maintainer: Option<String>,
     #[serde(rename = "OutOfDate")]
     out_of_date: Option<i64>,
+    #[serde(rename = "LastModified")]
+    last_modified: Option<i64>,
 }
 
 /// Parse an AUR RPC v5 `search` response body into hits.
@@ -78,6 +80,7 @@ pub fn parse_rpc_response(body: &str) -> anyhow::Result<Vec<PackageHit>> {
                 maintained: r.maintainer.is_some(),
                 out_of_date: r.out_of_date.is_some(),
                 repo: None,
+                last_modified: r.last_modified,
             },
         })
         .collect())

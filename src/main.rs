@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 mod model;
+mod sources;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

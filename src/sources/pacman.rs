@@ -1,4 +1,40 @@
-use crate::model::{PackageHit, SourceId, SourceMeta};
+use crate::model::{Action, CommandLine, PackageHit, SourceId, SourceMeta};
+use crate::sources::Source;
+use async_trait::async_trait;
+use tokio::process::Command;
+
+pub struct PacmanSource;
+
+impl PacmanSource {
+    pub fn new() -> Self {
+        PacmanSource
+    }
+}
+
+#[async_trait]
+impl Source for PacmanSource {
+    fn id(&self) -> SourceId {
+        SourceId::Pacman
+    }
+
+    fn display_name(&self) -> &'static str {
+        "repo"
+    }
+
+    async fn search(&self, query: &str) -> anyhow::Result<Vec<PackageHit>> {
+        // `pacman -Ss` exits 1 when there are no matches; that is not an error.
+        let output = Command::new("pacman").arg("-Ss").arg(query).output().await?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_search_output(&text))
+    }
+
+    fn action_command(&self, _action: Action, pkg: &str) -> CommandLine {
+        CommandLine {
+            program: "sudo".into(),
+            args: vec!["pacman".into(), "-S".into(), pkg.into()],
+        }
+    }
+}
 
 /// Parse the output of `pacman -Ss <query>`.
 ///

@@ -1,5 +1,45 @@
-use crate::model::{PackageHit, SourceId, SourceMeta};
+use crate::model::{Action, CommandLine, PackageHit, SourceId, SourceMeta};
+use crate::sources::Source;
+use async_trait::async_trait;
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
+
+pub struct AurSource {
+    client: reqwest::Client,
+}
+
+impl AurSource {
+    pub fn new() -> Self {
+        AurSource {
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl Source for AurSource {
+    fn id(&self) -> SourceId {
+        SourceId::Aur
+    }
+
+    fn display_name(&self) -> &'static str {
+        "aur"
+    }
+
+    async fn search(&self, query: &str) -> anyhow::Result<Vec<PackageHit>> {
+        let encoded = utf8_percent_encode(query, NON_ALPHANUMERIC).to_string();
+        let url = format!("https://aur.archlinux.org/rpc/v5/search/{encoded}?by=name-desc");
+        let body = self.client.get(&url).send().await?.text().await?;
+        parse_rpc_response(&body)
+    }
+
+    fn action_command(&self, _action: Action, pkg: &str) -> CommandLine {
+        CommandLine {
+            program: "yay".into(),
+            args: vec!["-S".into(), pkg.into()],
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct RpcResponse {

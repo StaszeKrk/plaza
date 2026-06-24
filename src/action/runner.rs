@@ -20,6 +20,20 @@ pub struct ActiveTask {
     _master: Box<dyn MasterPty + Send>,
 }
 
+impl ActiveTask {
+    /// Resize both the emulated screen and the underlying PTY so output reflows
+    /// to the visible area (and the newest lines stay at the bottom).
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        let _ = self._master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        self.parser.set_size(rows, cols);
+    }
+}
+
 /// Spawn `spec.command` in a PTY of size rows×cols. Output bytes are sent as
 /// `AppEvent::PtyOutput`; on exit, `AppEvent::ActionFinished` is sent. Both
 /// carry `id` so the UI can ignore events from a task it has since replaced.

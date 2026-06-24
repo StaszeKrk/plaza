@@ -14,7 +14,7 @@ use crate::app::{App, Focus, MainView, TaskView};
 use crate::event::AppEvent;
 use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -107,7 +107,18 @@ fn handle_event(
     sources: &[Arc<dyn Source>],
 ) {
     match ev {
-        AppEvent::Input(Event::Key(key)) => handle_key(app, key, tx),
+        // Ignore key-release events (terminals with the kitty keyboard protocol,
+        // e.g. ghostty, report them — otherwise a held key types an extra char
+        // on release and flickers the search).
+        AppEvent::Input(Event::Key(key)) if key.kind != KeyEventKind::Release => {
+            handle_key(app, key, tx)
+        }
+        AppEvent::Input(Event::Resize(w, h)) => {
+            if let Some(task) = &mut app.task {
+                let (rows, cols) = expanded_pty_size(w, h);
+                task.resize(rows, cols);
+            }
+        }
         AppEvent::DispatchSearch { gen } => {
             if gen == app.debounce_gen && !app.query.is_empty() {
                 let query_id = app.start_query(app.query.clone());
@@ -151,6 +162,15 @@ fn handle_event(
     }
 }
 
+/// PTY size matching the expanded task-pane's inner area: the body is the
+/// terminal minus the search bar (3) and status bar (1); the overlay block
+/// borders take 1 row/col on each side.
+fn expanded_pty_size(term_cols: u16, term_rows: u16) -> (u16, u16) {
+    let rows = term_rows.saturating_sub(6).max(4);
+    let cols = term_cols.saturating_sub(2).max(20);
+    (rows, cols)
+}
+
 fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     let Some(spec) = app.confirm.take() else { return };
     // Cancel/replace any prior task: dropping it closes the PTY, so an abandoned
@@ -159,9 +179,7 @@ fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     app.task_seq += 1;
     let id = app.task_seq;
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-    // leave a small margin for the overlay border
-    let rows = rows.saturating_sub(4).max(10);
-    let cols = cols.saturating_sub(4).max(40);
+    let (rows, cols) = expanded_pty_size(cols, rows);
     match start_action(spec, id, rows, cols, tx.clone()) {
         Ok(task) => {
             app.task = Some(task);

@@ -32,7 +32,7 @@ Manage:
 - Removes the selected package at a configurable depth (`-Rs` by default, also
   `-Rns` or `-R`, set in options).
 - Upgrades per source or all at once. "All" chains each source in one task
-  (`sudo pacman -Syu && yay -Sua`).
+  (`sudo pacman -Syu && paru -Sua`, using whichever AUR helper you have).
 
 General:
 
@@ -40,13 +40,15 @@ General:
   AUR build questions work normally. A hotkey returns you to it.
 - A small options menu (press `o`): hide the keybinding hints, collapse all repos
   into one `[official]` badge, switch the color palette and skin (see
-  [Theming](#theming)), set the search delay, and pick the remove depth. Settings
-  are saved to `~/.config/plaza/settings.json`.
+  [Theming](#theming)), set the search delay, pick the remove depth, and choose
+  the AUR helper (auto, yay, or paru). Settings are saved to
+  `~/.config/plaza/settings.json`.
 
 ## Requirements
 
 - pacman, for official-repo search, install, and removal
-- yay, for AUR search and upgrades
+- an AUR helper (yay or paru), for AUR installs and upgrades. AUR search itself
+  needs no helper; with neither installed you can still browse AUR results.
 - checkupdates (from pacman-contrib), for live update counts without root
 - Rust and Cargo, to build
 

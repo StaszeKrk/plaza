@@ -1,14 +1,23 @@
 use crate::app::{ActiveView, App, Focus, MainView};
+use crate::model::SourceId;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     match app.active_view {
         ActiveView::Search => match app.main_view {
-            MainView::Results => draw_results(frame, app, area),
+            MainView::Results => {
+                // Empty search + no results: the branded welcome / hero screen.
+                if app.query.is_empty() && app.rows.is_empty() {
+                    crate::ui::welcome::draw(frame, app, area);
+                } else {
+                    draw_results(frame, app, area);
+                }
+            }
             MainView::Detail => crate::ui::detail::draw(frame, app, area),
         },
         ActiveView::Manage => draw_manage(frame, app, area),
@@ -19,8 +28,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 /// installed-package list below with upgradable packages floated to the top.
 fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     let scope_active = app.is_active(Focus::Scope);
-    let scope_border = block_color(app, Focus::Scope);
-    let list_border = block_color(app, Focus::List);
+    let scope_border = crate::ui::border_color(app, Focus::Scope);
+    let list_border = crate::ui::border_color(app, Focus::List);
+    let pal = &app.palette;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -32,11 +42,11 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     for i in 0..app.upgrade_scope_count() {
         let chip = format!(" {} {} ", app.upgrade_scope_label(i), app.upgrade_scope_pending(i));
         let style = if i == app.upgrade_scope_selected && scope_active {
-            Style::default().add_modifier(Modifier::REVERSED)
+            crate::ui::highlight_style(app)
         } else if i == app.upgrade_scope_selected {
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)
+            Style::default().add_modifier(Modifier::BOLD).fg(pal.accent)
         } else {
-            Style::default()
+            Style::default().fg(pal.muted)
         };
         spans.push(Span::styled(format!("[{chip}]"), style));
         spans.push(Span::raw(" "));
@@ -46,37 +56,33 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         " upgrade · h/l · ⏎ run · (install pacman-contrib for live counts) ".to_string()
     };
-    let chips = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(scope_border))
-            .title(scope_title),
+    frame.render_widget(
+        Paragraph::new(Line::from(spans))
+            .block(crate::ui::themed_block(app, scope_border, scope_title)),
+        chunks[0],
     );
-    frame.render_widget(chips, chunks[0]);
 
     // --- installed list (updates floated to top, filtered by the search bar) ---
     let rows = app.manage_rows();
     let items: Vec<ListItem> = rows
         .iter()
-        .map(|p| {
+        .map(|pk| {
             let mut spans = vec![
-                Span::raw(format!("{:<28} ", truncate(&p.name, 28))),
+                Span::styled(format!("{:<28} ", truncate(&pk.name, 28)), Style::default().fg(pal.fg)),
                 Span::styled(
-                    format!("{:<16} ", truncate(&p.version, 16)),
-                    Style::default().fg(Color::DarkGray),
+                    format!("{:<16} ", truncate(&pk.version, 16)),
+                    Style::default().fg(pal.muted),
                 ),
             ];
-            match app.update_for(&p.name) {
+            match app.update_for(&pk.name) {
                 Some(nv) => spans.push(Span::styled(
-                    format!("↑{:<13} ", truncate(nv, 13)),
-                    Style::default().fg(Color::Green),
+                    format!("{}{:<13} ", crate::ui::ic_update(app), truncate(nv, 13)),
+                    Style::default().fg(pal.update),
                 )),
                 None => spans.push(Span::raw(format!("{:<15} ", ""))),
             }
-            spans.push(Span::styled(
-                format!("[{}]", p.origin),
-                Style::default().fg(Color::Blue),
-            ));
+            let src = if pk.origin == "aur" { SourceId::Aur } else { SourceId::Pacman };
+            spans.push(crate::ui::badge_span(app, &pk.origin, src));
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -91,15 +97,11 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
             app.manage_filter
         )
     };
+    let cursor = crate::ui::cursor_symbol(app);
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(list_border))
-                .title(title),
-        )
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("▸ ");
+        .block(crate::ui::themed_block(app, list_border, title))
+        .highlight_style(crate::ui::highlight_style(app))
+        .highlight_symbol(&cursor);
 
     let mut state = ListState::default();
     if !rows.is_empty() {
@@ -108,55 +110,49 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_stateful_widget(list, chunks[1], &mut state);
 }
 
-/// Border color for a panel: cyan when active (interacting), yellow when only
-/// hovered (navigate mode), dim otherwise.
-pub fn block_color(app: &App, f: Focus) -> Color {
-    if app.is_active(f) {
-        Color::Cyan
-    } else if app.is_hovered(f) {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    }
-}
-
 fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
-    let border = block_color(app, Focus::Main);
+    let border = crate::ui::border_color(app, Focus::Main);
+    let pal = &app.palette;
+    let pkg_icon = crate::ui::ic_package(app);
+    let cursor = crate::ui::cursor_symbol(app);
 
     let items: Vec<ListItem> = app
         .rows
         .iter()
         .map(|row| {
             let shown = app.effective_providers(row);
-            let badges: String = shown
-                .iter()
-                .map(|p| format!("[{}]", app.provider_badge(p)))
-                .collect();
-            let installed = if row.any_installed() { " ✓" } else { "" };
             let ver = shown
                 .first()
                 .map(|p| p.version.as_str())
                 .or_else(|| row.providers.first().map(|p| p.version.as_str()))
                 .unwrap_or("");
-            ListItem::new(format!(
-                "{:<28} {} {}{}",
-                truncate(&row.name, 28),
-                badges,
-                ver,
-                installed
-            ))
+            let mut spans: Vec<Span> = Vec::new();
+            if !pkg_icon.is_empty() {
+                spans.push(Span::styled(format!("{pkg_icon} "), Style::default().fg(pal.muted)));
+            }
+            spans.push(Span::styled(
+                format!("{:<28} ", truncate(&row.name, 28)),
+                Style::default().fg(pal.fg),
+            ));
+            for prov in &shown {
+                spans.push(crate::ui::badge_span(app, app.provider_badge(prov), prov.source_id));
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(ver.to_string(), Style::default().fg(pal.muted)));
+            if row.any_installed() {
+                spans.push(Span::styled(
+                    format!("  {}", crate::ui::ic_check(app)),
+                    Style::default().fg(pal.installed),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border))
-                .title(format!(" results ({}) ", app.rows.len())),
-        )
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("▸ ");
+        .block(crate::ui::themed_block(app, border, format!(" results ({}) ", app.rows.len())))
+        .highlight_style(crate::ui::highlight_style(app))
+        .highlight_symbol(&cursor);
 
     let mut state = ListState::default();
     if !app.rows.is_empty() {

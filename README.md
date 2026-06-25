@@ -39,8 +39,9 @@ General:
 - Actions run in a background pane backed by a real terminal, so sudo prompts and
   AUR build questions work normally. A hotkey returns you to it.
 - A small options menu (press `o`): hide the keybinding hints, collapse all repos
-  into one `[official]` badge, set the search delay, and pick the remove depth.
-  Settings are saved to `~/.config/plaza/settings.json`.
+  into one `[official]` badge, switch the color palette and skin (see
+  [Theming](#theming)), set the search delay, and pick the remove depth. Settings
+  are saved to `~/.config/plaza/settings.json`.
 
 ## Requirements
 
@@ -75,10 +76,11 @@ plaza --search firefox
 Plaza has two modes, like a tiling layout you tab around:
 
 - Navigate: arrow keys (or `hjkl`) move the highlighted panel. The highlight is
-  shown with a yellow border.
+  shown with the theme's hover border color (amber in the default theme).
 - Interact: press Enter or Space to focus the highlighted panel. Its border turns
-  cyan and the arrow keys now act inside it (move the selection, pick a scope,
-  type in the search box). Press Esc to step back to navigate.
+  the theme's active accent color and the arrow keys now act inside it (move the
+  selection, pick a scope, type in the search box). Press Esc to step back to
+  navigate.
 
 ## Keys
 
@@ -101,6 +103,31 @@ Plaza has two modes, like a tiling layout you tab around:
 
 Search and Manage keep separate search text, so switching views does not lose
 either one.
+
+## Theming
+
+Plaza's look is split into two independent, swappable parts:
+
+- a **palette**: the colors, and
+- a **skin**: everything else (border style, corner radius, glyphs/icons, and the
+  highlight and badge styles).
+
+Switch either one live from the options menu (`o`): the `Palette` and `Skin` rows
+cycle through the built-ins plus anything you have added, and the choice is saved
+to `~/.config/plaza/settings.json`.
+
+Built-in palettes: `plaza-dusk` (default), `gruvbox`, `nord`, `dracula`,
+`tokyo-night`, `solarized-dark`, and `ansi` (which uses your terminal's own 16
+colors, so it follows whatever theme the terminal is set to). Built-in skins:
+`soft` (default), `sharp`, and `plain` (square borders and no Nerd Font glyphs,
+for terminals without one).
+
+To make your own, drop a `.toml` file in `~/.config/plaza/palettes/` or
+`~/.config/plaza/skins/`. The file name is the theme name. Plaza loads new files
+on the next launch, and edits to the file that is currently active reload live.
+A palette file may set only the colors it wants to change; the rest fall back to
+the default. See [docs/theming.md](docs/theming.md) for the full format and field
+list.
 
 ## License
 

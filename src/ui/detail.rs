@@ -1,23 +1,31 @@
 use crate::app::{App, Focus};
-use ratatui::layout::Rect;
+use crate::model::SourceId;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let Some(row) = app.selected_row() else {
-        frame.render_widget(Block::default().borders(Borders::ALL).title(" detail "), area);
+        frame.render_widget(
+            crate::ui::themed_block(app, app.palette.border_idle, " detail "),
+            area,
+        );
         return;
     };
-    let border = crate::ui::main_view::block_color(app, Focus::Main);
+    let pal = &app.palette;
+    let border = crate::ui::border_color(app, Focus::Main);
 
     let header = Paragraph::new(vec![
         Line::from(Span::styled(
             format!("‹ {}", row.name),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         )),
-        Line::from(row.best_description.clone()),
+        Line::from(Span::styled(
+            row.best_description.clone(),
+            Style::default().fg(pal.fg),
+        )),
         Line::from(""),
     ]);
 
@@ -25,57 +33,62 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     // The first pacman provider is the highest-priority repo = default.
     let default_idx = providers
         .iter()
-        .position(|p| p.source_id == crate::model::SourceId::Pacman);
+        .position(|p| p.source_id == SourceId::Pacman);
 
+    let cursor = crate::ui::cursor_symbol(app);
     let items: Vec<ListItem> = providers
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let inst = if p.installed {
-                format!("✓ {}", p.installed_version.as_deref().unwrap_or(""))
-            } else {
-                String::new()
-            };
-            let notes = if let Some(votes) = p.meta.votes {
+            let mut spans = vec![
+                crate::ui::badge_span(app, app.provider_badge(p), p.source_id),
+                Span::raw("  "),
+                Span::styled(format!("{:<14} ", p.version), Style::default().fg(pal.fg)),
+            ];
+            if p.installed {
+                spans.push(Span::styled(
+                    format!(
+                        "{} {}  ",
+                        crate::ui::ic_check(app),
+                        p.installed_version.as_deref().unwrap_or("")
+                    ),
+                    Style::default().fg(pal.installed),
+                ));
+            }
+            let (note, col) = if let Some(votes) = p.meta.votes {
                 let m = if p.meta.maintained { "maintained" } else { "orphaned" };
-                let ood = if p.meta.out_of_date { " · out-of-date" } else { "" };
-                format!("{votes} votes · {m}{ood}")
+                if p.meta.out_of_date {
+                    (format!("{votes} votes · {m} · out-of-date"), pal.danger)
+                } else {
+                    (format!("{votes} votes · {m}"), pal.muted)
+                }
             } else if Some(i) == default_idx {
-                "official · default".to_string()
+                ("official · default".to_string(), pal.muted)
             } else if p.meta.repo.is_some() {
-                "official".to_string()
+                ("official".to_string(), pal.muted)
             } else {
-                String::new()
+                (String::new(), pal.muted)
             };
-            ListItem::new(format!(
-                "{:<16} {:<14} {:<12} {}",
-                app.provider_badge(p),
-                p.version,
-                inst,
-                notes
-            ))
+            if !note.is_empty() {
+                spans.push(Span::styled(note, Style::default().fg(col)));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    let inner = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border))
-        .title(" detail · ⏎ install · esc back ");
+    let inner = crate::ui::themed_block(app, border, " detail · ⏎ install · esc back ");
     let list_area = inner.inner(area);
     frame.render_widget(inner, area);
 
-    let chunks = ratatui::layout::Layout::default()
-        .direction(ratatui::layout::Direction::Vertical)
-        .constraints([
-            ratatui::layout::Constraint::Length(3),
-            ratatui::layout::Constraint::Min(0),
-        ])
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(list_area);
     frame.render_widget(header, chunks[0]);
 
     let list = List::new(items)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("▸ ");
+        .highlight_style(crate::ui::highlight_style(app))
+        .highlight_symbol(&cursor);
     let mut state = ListState::default();
     if !providers.is_empty() {
         state.select(Some(app.detail_selected.min(providers.len() - 1)));

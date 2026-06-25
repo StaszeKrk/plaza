@@ -8,6 +8,7 @@ mod event;
 mod model;
 mod search;
 mod sources;
+mod theme;
 mod ui;
 
 use crate::action::runner::{key_to_bytes, start_action, TaskState};
@@ -91,12 +92,20 @@ async fn run_tui() -> anyhow::Result<()> {
 
     spawn_input_task(tx.clone());
     spawn_stats_tasks(tx.clone());
+    spawn_theme_tick(tx.clone());
 
     terminal.draw(|f| ui::draw(f, &app))?;
     while let Some(ev) = rx.recv().await {
-        handle_event(&mut app, ev, &tx, &sources);
-        if app.should_quit {
-            break;
+        if let AppEvent::ThemeReloadTick = ev {
+            // Only redraw when a theme file actually changed on disk.
+            if !app.poll_theme_reload() {
+                continue;
+            }
+        } else {
+            handle_event(&mut app, ev, &tx, &sources);
+            if app.should_quit {
+                break;
+            }
         }
         terminal.draw(|f| ui::draw(f, &app))?;
     }
@@ -115,6 +124,20 @@ fn spawn_input_task(tx: UnboundedSender<AppEvent>) {
         let mut reader = EventStream::new();
         while let Some(Ok(ev)) = reader.next().await {
             if tx.send(AppEvent::Input(ev)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Live-reload metronome: nudges the event loop every 300ms so edits to the
+/// active theme file are picked up even while the UI is otherwise idle.
+fn spawn_theme_tick(tx: UnboundedSender<AppEvent>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(300));
+        loop {
+            tick.tick().await;
+            if tx.send(AppEvent::ThemeReloadTick).is_err() {
                 break;
             }
         }

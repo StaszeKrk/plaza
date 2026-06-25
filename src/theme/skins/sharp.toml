@@ -1,0 +1,9 @@
+# sharp: heavy square borders, bold highlight, bracket badges, nerd icons.
+# Copy to ~/.config/plaza/skins/ and tweak.
+highlight = "bold"
+badge     = "brackets"
+
+[border]
+thickness = 2   # heavy
+radius    = 0   # square
+double    = false

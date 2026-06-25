@@ -294,6 +294,7 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
             sel == 5,
             format!("    Remove depth: {}", app.settings.remove_depth.label()),
         ),
+        row(sel == 6, format!("    AUR helper: {}", aur_helper_label(app))),
         Line::from(""),
         Line::from(Span::styled(
             "  \u{2191}\u{2193} move \u{b7} space toggle/cycle \u{b7} esc close",
@@ -308,6 +309,18 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(lines).block(themed_block(app, app.palette.accent, " Options ")),
         rect,
     );
+}
+
+/// Label for the AUR-helper options row: the configured choice, plus the
+/// resolved binary when it differs (a fallback) or a hint when none is installed.
+fn aur_helper_label(app: &App) -> String {
+    let setting = app.settings.aur_helper.label();
+    match (app.helpers_available, &app.aur_helper_bin) {
+        ((false, false), _) => format!("{setting} (none installed)"),
+        (_, Some(bin)) if app.aur_helper_fell_back => format!("{setting} -> {bin}"),
+        (_, Some(bin)) if setting == "auto" => format!("{setting} ({bin})"),
+        _ => setting.to_string(),
+    }
 }
 
 /// A centered rect `width` cols by `height` rows (clamped to `area`).

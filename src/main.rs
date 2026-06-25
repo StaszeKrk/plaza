@@ -61,7 +61,7 @@ fn install_panic_hook() {
 async fn run_tui() -> anyhow::Result<()> {
     let detected = sources::detect_sources();
     if detected.is_empty() {
-        eprintln!("plaza: no supported package sources detected (need pacman and/or yay)");
+        eprintln!("plaza: no supported package sources detected (need pacman, and yay or paru for AUR)");
         std::process::exit(1);
     }
     let sources: Vec<Arc<dyn Source>> = detected.into_iter().map(Arc::from).collect();
@@ -88,10 +88,13 @@ async fn run_tui() -> anyhow::Result<()> {
     // `checkupdates` (pacman-contrib) syncs a private db so update counts stay
     // live without root; without it we fall back to a stale `pacman -Qu`.
     app.has_checkupdates = sources::which("checkupdates");
+    // Detect AUR helpers (yay/paru) and resolve the active one from settings.
+    app.helpers_available = sources::detect_aur_helpers();
+    app.recompute_aur_helper();
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
     spawn_input_task(tx.clone());
-    spawn_stats_tasks(tx.clone());
+    spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone());
     spawn_theme_tick(tx.clone());
 
     terminal.draw(|f| ui::draw(f, &app))?;
@@ -213,7 +216,7 @@ fn handle_event(
             }
             // Refresh stats + installed index after the current action completes.
             if matched {
-                spawn_stats_tasks(tx.clone());
+                spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone());
             }
         }
         _ => {}
@@ -251,7 +254,7 @@ fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     }
 }
 
-fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
+fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>) {
     // installed counts + index
     let tx_inst = tx.clone();
     tokio::spawn(async move {
@@ -284,7 +287,7 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
     // best-effort update counts + list (repos and AUR)
     tokio::spawn(async move {
         let repo_text = repo_update_text().await;
-        let aur_text = aur_update_text().await;
+        let aur_text = aur_update_text(aur_helper).await;
         let repo = repo_text
             .as_deref()
             .map(sources::updates::parse_update_count);
@@ -347,12 +350,10 @@ async fn repo_update_text() -> Option<String> {
     }
 }
 
-/// Raw AUR-update output from `yay -Qua`, or None when yay is absent.
-async fn aur_update_text() -> Option<String> {
-    if !sources::which("yay") {
-        return None;
-    }
-    match Command::new("yay").arg("-Qua").output().await {
+/// Raw AUR-update output from `<helper> -Qua`, or None when no helper is present.
+async fn aur_update_text(helper: Option<String>) -> Option<String> {
+    let helper = helper?;
+    match Command::new(&helper).arg("-Qua").output().await {
         Ok(out) => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
         Err(_) => None,
     }
@@ -394,6 +395,9 @@ fn schedule_debounced_search(app: &mut App, tx: &UnboundedSender<AppEvent>) {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
+    // Any keypress dismisses a transient status message.
+    app.status_msg = None;
+
     // Options overlay captures input first.
     if app.options_open {
         handle_options_key(app, key);
@@ -433,7 +437,7 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
         app.toggle_view();
         if app.active_view == ActiveView::Manage {
-            spawn_stats_tasks(tx.clone());
+            spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone());
         }
         return;
     }
@@ -634,7 +638,7 @@ fn interact_sidebar(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>
             app.interacting = false;
             app.focus = app.content_landing();
             if app.active_view == ActiveView::Manage {
-                spawn_stats_tasks(tx.clone()); // refresh installed + updates
+                spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone()); // refresh installed + updates
             }
         }
         KeyCode::Esc => app.interacting = false,
@@ -709,9 +713,19 @@ fn request_remove(app: &mut App) {
 }
 
 /// Open the confirm modal for the selected upgrade scope (All or one source).
+/// An AUR-only scope with no helper installed shows a message instead.
 fn request_upgrade(app: &mut App) {
+    if !app.can_upgrade_selected() {
+        app.status_msg = Some(NO_AUR_HELPER_MSG.to_string());
+        return;
+    }
+    let note = if app.upgrade_scope_touches_aur() {
+        app.aur_fallback_note()
+    } else {
+        None
+    };
     app.confirm = Some(app.upgrade_spec());
-    app.confirm_note = None;
+    app.confirm_note = note;
 }
 
 /// Build an ActionSpec for the selected provider and open the confirm modal.
@@ -720,10 +734,27 @@ fn request_install(app: &mut App) {
     let Some(row) = app.selected_row() else { return };
     let providers = app.effective_providers(row);
     let Some(provider) = providers.get(app.detail_selected) else { return };
-    let name = row.name.clone();
     let source_id = provider.source_id;
-    let command = provider.install_command(&name);
-    let note = aur_recency_note(provider);
+    // Installing from the AUR needs a helper; surface a message when none exists.
+    // Pacman ignores the helper, so an empty binary is harmless for that branch.
+    let aur_bin = match &app.aur_helper_bin {
+        Some(bin) => bin.clone(),
+        None => {
+            if source_id == SourceId::Aur {
+                app.status_msg = Some(NO_AUR_HELPER_MSG.to_string());
+                return;
+            }
+            String::new()
+        }
+    };
+    let name = row.name.clone();
+    let command = provider.install_command(&name, &aur_bin);
+    let recency = aur_recency_note(provider);
+    // Compose the AUR fallback note (if any) with the recency warning.
+    let note = match (app.aur_fallback_note_for(source_id), recency) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
+    };
     app.confirm = Some(ActionSpec {
         targets: vec![name],
         source_id,
@@ -732,6 +763,8 @@ fn request_install(app: &mut App) {
     });
     app.confirm_note = note;
 }
+
+const NO_AUR_HELPER_MSG: &str = "no AUR helper installed (need yay or paru)";
 
 // --- core --search CLI ---
 
@@ -748,7 +781,7 @@ async fn run_search_cli(term: &str) -> anyhow::Result<()> {
     use crate::search::aggregator::{merge, relevance_sort};
     let sources = sources::detect_sources();
     if sources.is_empty() {
-        eprintln!("plaza: no supported package sources detected (need pacman and/or yay)");
+        eprintln!("plaza: no supported package sources detected (need pacman, and yay or paru for AUR)");
         std::process::exit(1);
     }
     let mut handles = Vec::new();

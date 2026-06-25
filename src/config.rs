@@ -1,4 +1,4 @@
-use crate::model::RemoveDepth;
+use crate::model::{AurHelper, RemoveDepth};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -16,6 +16,8 @@ pub struct Settings {
     pub debounce_ms: u64,
     /// How aggressively `Remove` cleans up (`-R` / `-Rs` / `-Rns`).
     pub remove_depth: RemoveDepth,
+    /// Which AUR helper to drive for install/upgrade. `Auto` picks paru, else yay.
+    pub aur_helper: AurHelper,
     /// Active color palette name (built-in or a file in
     /// `~/.config/plaza/palettes/`).
     pub palette: String,
@@ -30,6 +32,7 @@ impl Default for Settings {
             collapse_repos: false,
             debounce_ms: 400,
             remove_depth: RemoveDepth::WithDeps,
+            aur_helper: AurHelper::Auto,
             palette: crate::theme::DEFAULT_PALETTE.to_string(),
             skin: crate::theme::DEFAULT_SKIN.to_string(),
         }
@@ -80,6 +83,26 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.palette, "plaza-dusk");
         assert_eq!(s.skin, "soft");
+    }
+
+    #[test]
+    fn default_aur_helper_is_auto() {
+        assert_eq!(Settings::default().aur_helper, AurHelper::Auto);
+    }
+
+    #[test]
+    fn old_settings_without_aur_helper_load_as_auto() {
+        // A settings file written before this field existed must still load.
+        let json = r#"{"show_hotkeys":true,"collapse_repos":false,"debounce_ms":400}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.aur_helper, AurHelper::Auto);
+    }
+
+    #[test]
+    fn roundtrip_keeps_aur_helper() {
+        let s = Settings { aur_helper: AurHelper::Paru, ..Default::default() };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.aur_helper, AurHelper::Paru);
     }
 
     #[test]

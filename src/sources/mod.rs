@@ -29,11 +29,17 @@ pub fn detect_sources() -> Vec<Box<dyn Source>> {
     let mut sources: Vec<Box<dyn Source>> = Vec::new();
     if which("pacman") {
         sources.push(Box::new(pacman::PacmanSource::new()));
-    }
-    if which("yay") {
+        // AUR search is a plain RPC call and needs no local helper, so it shows
+        // whenever we are on an Arch-like system (pacman present). Install and
+        // upgrade are gated on a helper binary (yay/paru) separately.
         sources.push(Box::new(aur::AurSource::new()));
     }
     sources
+}
+
+/// Detect which AUR helper binaries are present on PATH, as `(yay, paru)`.
+pub fn detect_aur_helpers() -> (bool, bool) {
+    (which("yay"), which("paru"))
 }
 
 #[cfg(test)]

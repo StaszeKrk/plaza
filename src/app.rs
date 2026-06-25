@@ -151,6 +151,16 @@ pub struct App {
     skin_mtime: Option<SystemTime>,
     pub options_open: bool,
     pub options_selected: usize,
+    /// Which AUR helper binaries are installed, as `(yay, paru)`. Set at startup.
+    pub helpers_available: (bool, bool),
+    /// Resolved AUR helper binary per `settings.aur_helper` + availability, or
+    /// `None` when no helper is installed. Recomputed when the setting changes.
+    pub aur_helper_bin: Option<String>,
+    /// True when the configured helper was missing and we fell back to the other.
+    pub aur_helper_fell_back: bool,
+    /// Transient one-line status message (e.g. "no AUR helper installed"), shown
+    /// in the status bar until the next keypress.
+    pub status_msg: Option<String>,
     pub should_quit: bool,
 }
 
@@ -212,7 +222,28 @@ impl App {
             skin_mtime,
             options_open: false,
             options_selected: 0,
+            helpers_available: (false, false),
+            aur_helper_bin: None,
+            aur_helper_fell_back: false,
+            status_msg: None,
             should_quit: false,
+        }
+    }
+
+    /// Recompute the resolved AUR helper binary and fallback flag from the
+    /// current `settings.aur_helper` and detected `helpers_available`. Call at
+    /// startup (after detection) and whenever the setting changes.
+    pub fn recompute_aur_helper(&mut self) {
+        let (yay, paru) = self.helpers_available;
+        match crate::model::resolve_aur_helper(self.settings.aur_helper, yay, paru) {
+            Some((bin, fell_back)) => {
+                self.aur_helper_bin = Some(bin.to_string());
+                self.aur_helper_fell_back = fell_back;
+            }
+            None => {
+                self.aur_helper_bin = None;
+                self.aur_helper_fell_back = false;
+            }
         }
     }
 
@@ -251,7 +282,7 @@ impl App {
     // --- Options overlay ---
 
     /// Number of option rows.
-    pub const OPTIONS_COUNT: usize = 6;
+    pub const OPTIONS_COUNT: usize = 7;
 
     pub fn move_options(&mut self, delta: i32) {
         let max = Self::OPTIONS_COUNT as i32 - 1;
@@ -267,9 +298,19 @@ impl App {
             3 => self.cycle_skin(),
             4 => self.settings.debounce_ms = next_debounce(self.settings.debounce_ms),
             5 => self.settings.remove_depth = self.settings.remove_depth.next(),
+            6 => self.cycle_aur_helper(),
             _ => {}
         }
         self.settings.save();
+    }
+
+    /// Advance the AUR helper setting through `Auto` plus the installed helpers,
+    /// then re-resolve the active binary.
+    pub fn cycle_aur_helper(&mut self) {
+        let (yay, paru) = self.helpers_available;
+        self.settings.aur_helper =
+            crate::model::next_aur_helper(self.settings.aur_helper, yay, paru);
+        self.recompute_aur_helper();
     }
 
     /// Advance to the next palette in the registry, persisting and re-resolving.
@@ -597,8 +638,19 @@ impl App {
     /// that source.
     pub fn upgrade_spec(&self) -> ActionSpec {
         let sources = self.present_sources();
+        // Pacman ignores the helper arg; AUR needs the resolved binary. When no
+        // helper is installed the AUR scope is unreachable (gated by the caller),
+        // so an empty string here is never actually run.
+        let aur_bin = self.aur_helper_bin.as_deref().unwrap_or("");
+        let have_aur = self.aur_helper_bin.is_some();
         if self.upgrade_scope_selected == 0 || self.upgrade_scope_selected > sources.len() {
-            let cmds: Vec<_> = sources.iter().map(|id| source_upgrade_command(*id)).collect();
+            // "All": chain each present source, but drop the AUR leg when no
+            // helper is installed so the repo upgrade still runs.
+            let cmds: Vec<_> = sources
+                .iter()
+                .filter(|id| **id != SourceId::Aur || have_aur)
+                .map(|id| source_upgrade_command(*id, aur_bin))
+                .collect();
             ActionSpec {
                 targets: vec!["all".to_string()],
                 source_id: sources.first().copied().unwrap_or(SourceId::Pacman),
@@ -611,8 +663,53 @@ impl App {
                 targets: vec![id.badge().to_string()],
                 source_id: id,
                 action: Action::Upgrade,
-                command: source_upgrade_command(id),
+                command: source_upgrade_command(id, aur_bin),
             }
+        }
+    }
+
+    /// Whether the selected upgrade scope can actually run. An AUR-only scope
+    /// needs a helper; "All" and repo scopes always can.
+    pub fn can_upgrade_selected(&self) -> bool {
+        let sources = self.present_sources();
+        if self.upgrade_scope_selected == 0 || self.upgrade_scope_selected > sources.len() {
+            return true;
+        }
+        let id = sources[self.upgrade_scope_selected - 1];
+        id != SourceId::Aur || self.aur_helper_bin.is_some()
+    }
+
+    /// Whether the selected upgrade scope includes the AUR (so an AUR-helper
+    /// note is relevant). "All" includes it when AUR is a present source.
+    pub fn upgrade_scope_touches_aur(&self) -> bool {
+        let sources = self.present_sources();
+        if self.upgrade_scope_selected == 0 || self.upgrade_scope_selected > sources.len() {
+            sources.contains(&SourceId::Aur)
+        } else {
+            sources[self.upgrade_scope_selected - 1] == SourceId::Aur
+        }
+    }
+
+    /// Note for the confirm modal when the configured AUR helper was missing and
+    /// Plaza fell back to the other one. `None` when no fallback happened.
+    pub fn aur_fallback_note(&self) -> Option<String> {
+        if !self.aur_helper_fell_back {
+            return None;
+        }
+        let bin = self.aur_helper_bin.as_deref()?;
+        Some(format!(
+            "configured AUR helper ({}) not found; using {}",
+            self.settings.aur_helper.label(),
+            bin
+        ))
+    }
+
+    /// The fallback note, but only when the action targets the AUR.
+    pub fn aur_fallback_note_for(&self, source_id: SourceId) -> Option<String> {
+        if source_id == SourceId::Aur {
+            self.aur_fallback_note()
+        } else {
+            None
         }
     }
 
@@ -682,8 +779,8 @@ mod tests {
     }
 
     #[test]
-    fn options_count_is_six() {
-        assert_eq!(App::OPTIONS_COUNT, 6);
+    fn options_count_matches_rows() {
+        assert_eq!(App::OPTIONS_COUNT, 7);
     }
 
     #[test]
@@ -795,9 +892,17 @@ mod tests {
         assert!(app.remove_spec().is_none());
     }
 
+    /// App with both sources present and yay resolved as the AUR helper.
+    fn app_with_yay() -> App {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        app.helpers_available = (true, false);
+        app.recompute_aur_helper();
+        app
+    }
+
     #[test]
     fn upgrade_spec_all_chains_present_sources() {
-        let app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let app = app_with_yay();
         // chip 0 = All
         let all = app.upgrade_spec();
         assert_eq!(all.action, Action::Upgrade);
@@ -807,7 +912,7 @@ mod tests {
 
     #[test]
     fn upgrade_spec_single_source_scope() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = app_with_yay();
         // chips: [All, repo, aur]
         assert_eq!(app.upgrade_scope_count(), 3);
         app.upgrade_scope_selected = 2; // aur
@@ -815,6 +920,50 @@ mod tests {
         assert_eq!(spec.source_id, SourceId::Aur);
         assert_eq!(spec.command.program, "yay");
         assert_eq!(spec.command.args, vec!["-Sua"]);
+    }
+
+    #[test]
+    fn upgrade_spec_drops_aur_when_no_helper() {
+        // No helper installed: "All" still upgrades repos, AUR leg is dropped.
+        let app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        assert!(app.aur_helper_bin.is_none());
+        let all = app.upgrade_spec();
+        // Single remaining command (pacman) is returned unwrapped by chain_commands.
+        assert_eq!(all.command.program, "sudo");
+        assert_eq!(all.command.args, vec!["pacman", "-Syu"]);
+    }
+
+    #[test]
+    fn can_upgrade_selected_gates_aur_only_scope() {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        // No helper: All (0) and repo (1) ok, AUR (2) blocked.
+        app.upgrade_scope_selected = 0;
+        assert!(app.can_upgrade_selected());
+        app.upgrade_scope_selected = 1;
+        assert!(app.can_upgrade_selected());
+        app.upgrade_scope_selected = 2;
+        assert!(!app.can_upgrade_selected());
+        // With a helper, the AUR scope is allowed.
+        app.helpers_available = (true, false);
+        app.recompute_aur_helper();
+        assert!(app.can_upgrade_selected());
+    }
+
+    #[test]
+    fn cycle_aur_helper_recomputes_binary() {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        app.helpers_available = (true, true); // both installed
+        app.recompute_aur_helper();
+        // Auto prefers paru.
+        assert_eq!(app.aur_helper_bin.as_deref(), Some("paru"));
+        // Auto -> yay.
+        app.cycle_aur_helper();
+        assert_eq!(app.settings.aur_helper, crate::model::AurHelper::Yay);
+        assert_eq!(app.aur_helper_bin.as_deref(), Some("yay"));
+        // yay -> paru.
+        app.cycle_aur_helper();
+        assert_eq!(app.settings.aur_helper, crate::model::AurHelper::Paru);
+        assert_eq!(app.aur_helper_bin.as_deref(), Some("paru"));
     }
 
     #[test]

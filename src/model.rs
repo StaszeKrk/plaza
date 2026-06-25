@@ -53,8 +53,8 @@ impl Provider {
 
     /// The command that installs `name` specifically from THIS provider.
     /// Pacman targets are repo-qualified (`repo/pkg`) so a non-default repo can
-    /// be chosen; the AUR goes through yay.
-    pub fn install_command(&self, name: &str) -> CommandLine {
+    /// be chosen; the AUR goes through `aur_bin` (the resolved helper, yay/paru).
+    pub fn install_command(&self, name: &str, aur_bin: &str) -> CommandLine {
         match self.source_id {
             SourceId::Pacman => {
                 let target = match &self.meta.repo {
@@ -67,7 +67,7 @@ impl Provider {
                 }
             }
             SourceId::Aur => CommandLine {
-                program: "yay".into(),
+                program: aur_bin.into(),
                 args: vec!["-S".into(), name.into()],
             },
         }
@@ -160,17 +160,75 @@ pub fn remove_command(name: &str, depth: RemoveDepth) -> CommandLine {
     }
 }
 
+/// Which AUR helper Plaza drives for install/upgrade actions. `Auto` resolves at
+/// runtime to whichever of paru/yay is installed (paru preferred when both are).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum AurHelper {
+    #[default]
+    Auto,
+    Yay,
+    Paru,
+}
+
+impl AurHelper {
+    /// Short label for the options overlay.
+    pub fn label(self) -> &'static str {
+        match self {
+            AurHelper::Auto => "auto",
+            AurHelper::Yay => "yay",
+            AurHelper::Paru => "paru",
+        }
+    }
+}
+
+/// Resolve which AUR helper binary to run, given the configured preference and
+/// which binaries are present on PATH. Returns the binary plus a `fell_back`
+/// flag (true when a forced helper was missing and the other was used instead).
+/// `None` when no helper is installed at all.
+pub fn resolve_aur_helper(
+    setting: AurHelper,
+    yay: bool,
+    paru: bool,
+) -> Option<(&'static str, bool)> {
+    match setting {
+        // Auto has no configured target to "miss", so it never reports a fallback.
+        AurHelper::Auto if paru => Some(("paru", false)),
+        AurHelper::Auto if yay => Some(("yay", false)),
+        AurHelper::Auto => None,
+        AurHelper::Paru if paru => Some(("paru", false)),
+        AurHelper::Paru if yay => Some(("yay", true)),
+        AurHelper::Paru => None,
+        AurHelper::Yay if yay => Some(("yay", false)),
+        AurHelper::Yay if paru => Some(("paru", true)),
+        AurHelper::Yay => None,
+    }
+}
+
+/// Cycle the AUR helper setting through `Auto` plus only the installed helpers
+/// (yay before paru). With neither installed, only `Auto` is reachable (no-op).
+pub fn next_aur_helper(current: AurHelper, yay: bool, paru: bool) -> AurHelper {
+    let mut ring = vec![AurHelper::Auto];
+    if yay {
+        ring.push(AurHelper::Yay);
+    }
+    if paru {
+        ring.push(AurHelper::Paru);
+    }
+    let idx = ring.iter().position(|h| *h == current).unwrap_or(0);
+    ring[(idx + 1) % ring.len()]
+}
+
 /// The full-upgrade command for a single source.
 /// - pacman: `sudo pacman -Syu` (sync + upgrade the repos)
-/// - aur:    `yay -Sua` (upgrade AUR packages only)
-pub fn source_upgrade_command(source_id: SourceId) -> CommandLine {
+/// - aur:    `<aur_bin> -Sua` (upgrade AUR packages only, via the resolved helper)
+pub fn source_upgrade_command(source_id: SourceId, aur_bin: &str) -> CommandLine {
     match source_id {
         SourceId::Pacman => CommandLine {
             program: "sudo".into(),
             args: vec!["pacman".into(), "-Syu".into()],
         },
         SourceId::Aur => CommandLine {
-            program: "yay".into(),
+            program: aur_bin.into(),
             args: vec!["-Sua".into()],
         },
     }
@@ -276,7 +334,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let cmd = p.install_command("neovim");
+        let cmd = p.install_command("neovim", "yay");
         assert_eq!(cmd.program, "sudo");
         assert_eq!(cmd.args, vec!["pacman", "-S", "extra-x86-64-v3/neovim"]);
 
@@ -287,8 +345,9 @@ mod tests {
             installed_version: None,
             meta: SourceMeta::default(),
         };
-        let cmd = aur.install_command("tty-clock");
-        assert_eq!(cmd.program, "yay");
+        assert_eq!(aur.install_command("tty-clock", "yay").program, "yay");
+        let cmd = aur.install_command("tty-clock", "paru");
+        assert_eq!(cmd.program, "paru");
         assert_eq!(cmd.args, vec!["-S", "tty-clock"]);
     }
 
@@ -318,18 +377,20 @@ mod tests {
     #[test]
     fn source_upgrade_commands() {
         assert_eq!(
-            source_upgrade_command(SourceId::Pacman).args,
+            source_upgrade_command(SourceId::Pacman, "yay").args,
             vec!["pacman", "-Syu"]
         );
-        let aur = source_upgrade_command(SourceId::Aur);
+        let aur = source_upgrade_command(SourceId::Aur, "yay");
         assert_eq!(aur.program, "yay");
         assert_eq!(aur.args, vec!["-Sua"]);
+        // The AUR upgrade honors the resolved helper binary.
+        assert_eq!(source_upgrade_command(SourceId::Aur, "paru").program, "paru");
     }
 
     #[test]
     fn chain_commands_single_and_many() {
-        let pac = source_upgrade_command(SourceId::Pacman);
-        let aur = source_upgrade_command(SourceId::Aur);
+        let pac = source_upgrade_command(SourceId::Pacman, "yay");
+        let aur = source_upgrade_command(SourceId::Aur, "yay");
         // single → unwrapped
         assert_eq!(chain_commands(std::slice::from_ref(&pac)), pac);
         // many → sh -c "a && b"
@@ -339,6 +400,42 @@ mod tests {
             all.args,
             vec!["-c".to_string(), "sudo pacman -Syu && yay -Sua".to_string()]
         );
+    }
+
+    #[test]
+    fn resolve_aur_helper_auto_prefers_paru() {
+        assert_eq!(resolve_aur_helper(AurHelper::Auto, true, true), Some(("paru", false)));
+        assert_eq!(resolve_aur_helper(AurHelper::Auto, true, false), Some(("yay", false)));
+        assert_eq!(resolve_aur_helper(AurHelper::Auto, false, true), Some(("paru", false)));
+        assert_eq!(resolve_aur_helper(AurHelper::Auto, false, false), None);
+    }
+
+    #[test]
+    fn resolve_aur_helper_forced_falls_back_with_flag() {
+        // Forced helper present: used, no fallback.
+        assert_eq!(resolve_aur_helper(AurHelper::Yay, true, true), Some(("yay", false)));
+        assert_eq!(resolve_aur_helper(AurHelper::Paru, true, true), Some(("paru", false)));
+        // Forced helper missing but the other present: fall back, flag set.
+        assert_eq!(resolve_aur_helper(AurHelper::Paru, true, false), Some(("yay", true)));
+        assert_eq!(resolve_aur_helper(AurHelper::Yay, false, true), Some(("paru", true)));
+        // Nothing installed: None regardless of the forced choice.
+        assert_eq!(resolve_aur_helper(AurHelper::Yay, false, false), None);
+        assert_eq!(resolve_aur_helper(AurHelper::Paru, false, false), None);
+    }
+
+    #[test]
+    fn next_aur_helper_cycles_only_installed() {
+        // Both installed: Auto -> yay -> paru -> Auto.
+        assert_eq!(next_aur_helper(AurHelper::Auto, true, true), AurHelper::Yay);
+        assert_eq!(next_aur_helper(AurHelper::Yay, true, true), AurHelper::Paru);
+        assert_eq!(next_aur_helper(AurHelper::Paru, true, true), AurHelper::Auto);
+        // Only paru: Auto <-> paru.
+        assert_eq!(next_aur_helper(AurHelper::Auto, false, true), AurHelper::Paru);
+        assert_eq!(next_aur_helper(AurHelper::Paru, false, true), AurHelper::Auto);
+        // Neither: only Auto is reachable (no-op).
+        assert_eq!(next_aur_helper(AurHelper::Auto, false, false), AurHelper::Auto);
+        // Stale setting (paru selected but not installed) advances from Auto's slot.
+        assert_eq!(next_aur_helper(AurHelper::Paru, true, false), AurHelper::Yay);
     }
 
     #[test]

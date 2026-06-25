@@ -44,6 +44,14 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(format!("{txt}   "), Style::default().fg(col)));
     }
 
+    // A transient status message (e.g. a missing AUR helper) takes the place of
+    // the hotkey hints until the next keypress.
+    if let Some(msg) = &app.status_msg {
+        spans.push(Span::styled(msg.clone(), Style::default().fg(pal.danger)));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
     if app.settings.show_hotkeys {
         let manage = app.active_view == ActiveView::Manage;
         let keys = if !app.interacting {

@@ -1,39 +1,63 @@
 # Plaza
 
-Plaza is a terminal UI for finding and installing packages. You search once and it
-queries every package source on the system at the same time. On Arch that means the
-official repositories and the AUR. Results are merged into one list, so a package
-name shows up once even when several sources provide it. Open a package to see each
-source that ships it, then install from inside Plaza. Installs run in the background,
-so you can keep searching while one downloads.
+Plaza is a terminal UI for finding, installing, and managing packages. You search
+once and it queries every package source on the system at the same time. On Arch
+that means the official repositories and the AUR. Results are merged into one list,
+so a package name shows up once even when several sources provide it. A separate
+Manage view lists everything installed, shows what has updates, and lets you remove
+or upgrade without leaving Plaza. Actions run in a background pane backed by a real
+terminal, so you can keep working while one runs.
 
 Plaza is Arch-only for now (pacman and the AUR). The source backends sit behind a
-trait, so apt, dnf, zypper, flatpak and snap can be added later.
+trait, so apt, dnf, zypper, flatpak, and snap can be added later.
 
 ## What it does
 
-- Searches all sources at once. Packages with the same name across sources are
+Search:
+
+- Queries all sources at once. Packages with the same name across sources are
   merged into one row.
 - Shows every repo or source that provides a package, with versions and what is
   already installed. The repo pacman installs from by default is marked.
-- Installs in a background pane backed by a real terminal, so sudo prompts and AUR
-  build questions work normally. A hotkey returns you to it.
 - Can install from a specific repo instead of the default.
 - Streams results in as each source replies, so a slow or offline source does not
   block the rest.
-- Has a small options menu (press o): hide the keybinding hints, collapse all repos
-  into one [official] badge, and set the search delay. Settings are saved to
-  ~/.config/plaza/settings.json.
 - Flags AUR packages whose PKGBUILD changed in the last seven days.
+
+Manage:
+
+- Lists every installed package with its origin repo (or `aur`), filterable by
+  typing.
+- Floats packages with a pending update to the top, marked with the new version.
+- Removes the selected package at a configurable depth (`-Rs` by default, also
+  `-Rns` or `-R`, set in options).
+- Upgrades per source or all at once. "All" chains each source in one task
+  (`sudo pacman -Syu && yay -Sua`).
+
+General:
+
+- Actions run in a background pane backed by a real terminal, so sudo prompts and
+  AUR build questions work normally. A hotkey returns you to it.
+- A small options menu (press `o`): hide the keybinding hints, collapse all repos
+  into one `[official]` badge, set the search delay, and pick the remove depth.
+  Settings are saved to `~/.config/plaza/settings.json`.
 
 ## Requirements
 
-- Rust and Cargo to build
-- pacman, for official-repo search and install
-- yay, for AUR search and install
-- checkupdates (from pacman-contrib), for the update count in the sidebar
+- pacman, for official-repo search, install, and removal
+- yay, for AUR search and upgrades
+- checkupdates (from pacman-contrib), for live update counts without root
+- Rust and Cargo, to build
 
-## Building
+## Install
+
+As a pacman package (tracked by pacman, removable with `pacman -R plaza`):
+
+```sh
+makepkg -si
+```
+
+Or build directly with Cargo:
 
 ```sh
 cargo build --release
@@ -43,24 +67,40 @@ cargo build --release
 A headless search is also available:
 
 ```sh
-cargo run -- --search firefox
+plaza --search firefox
 ```
+
+## Navigation
+
+Plaza has two modes, like a tiling layout you tab around:
+
+- Navigate: arrow keys (or `hjkl`) move the highlighted panel. The highlight is
+  shown with a yellow border.
+- Interact: press Enter or Space to focus the highlighted panel. Its border turns
+  cyan and the arrow keys now act inside it (move the selection, pick a scope,
+  type in the search box). Press Esc to step back to navigate.
 
 ## Keys
 
 | Key | Action |
 | --- | --- |
-| type | search; the bar is focused at launch |
-| / | focus the search bar from anywhere |
-| Esc, Enter, Down | leave the search bar for the list |
-| Up/Down, j/k | move within the focused pane |
-| Left/Right, h/l, Tab | move between panes |
-| Enter | open a package, or install the selected source |
-| backtick | open or collapse the install pane |
-| Esc in the install pane | step it down: full, peek, hidden |
-| Ctrl-C in a focused install | cancel that install |
+| type | search (or filter, in Manage); the bar is focused at launch |
+| Enter (in search) | run it and focus the results |
+| arrows, hjkl | navigate mode: move the highlight. interact mode: move inside the panel |
+| Enter, Space | focus the highlighted panel |
+| Esc | step out of the focused panel |
+| Tab | switch between the Search and Manage views |
+| / | jump to the search bar from anywhere |
+| Enter (on a result) | open it, then Enter on a source to install |
+| r, Enter (in Manage list) | remove the selected package |
+| h/l then Enter (on the upgrade chips) | upgrade that scope |
+| backtick | open or collapse the action pane |
+| Ctrl-C in a focused action | cancel that action |
 | o | options |
-| q | quit; during an install it switches to the install instead |
+| q | quit; during an action it switches to the action instead |
+
+Search and Manage keep separate search text, so switching views does not lose
+either one.
 
 ## License
 

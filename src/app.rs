@@ -1,19 +1,32 @@
 use crate::action::runner::ActiveTask;
 use crate::config::Settings;
 use crate::model::{
-    remove_command, upgrade_command, Action, ActionSpec, InstalledStats, PackageHit, PackageRow,
-    Provider, SourceId, UpdatesInfo,
+    chain_commands, remove_command, source_upgrade_command, Action, ActionSpec, InstalledStats,
+    PackageHit, PackageRow, Provider, SourceId, UpdatesInfo,
 };
 use crate::search::aggregator::{merge, relevance_sort};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
 use crate::sources::updates::UpdateEntry;
 
+/// A focusable panel. In the Search view the content panel is `Main`; in the
+/// Manage view it splits into `Scope` (upgrade chips) and `List` (installed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Search,
     Sidebar,
     Main,
+    Scope,
+    List,
     TaskPane,
+}
+
+/// Hover-movement direction (navigate mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dir {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,12 +36,12 @@ pub enum MainView {
 }
 
 /// Which sidebar VIEW is active. Drives what the center area shows. The Search
-/// view keeps the existing Results/Detail sub-state in `MainView`.
+/// view keeps the existing Results/Detail sub-state in `MainView`; Manage merges
+/// installed browsing and upgrades into one view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveView {
     Search,
-    Installed,
-    Updates,
+    Manage,
 }
 
 impl ActiveView {
@@ -36,16 +49,14 @@ impl ActiveView {
     pub fn index(self) -> usize {
         match self {
             ActiveView::Search => 0,
-            ActiveView::Installed => 1,
-            ActiveView::Updates => 2,
+            ActiveView::Manage => 1,
         }
     }
 
     /// The view at sidebar VIEWS index `i` (out-of-range falls back to Search).
     pub fn from_index(i: usize) -> ActiveView {
         match i {
-            1 => ActiveView::Installed,
-            2 => ActiveView::Updates,
+            1 => ActiveView::Manage,
             _ => ActiveView::Search,
         }
     }
@@ -87,8 +98,8 @@ pub enum TaskView {
     Expanded,
 }
 
-/// Number of entries in the sidebar VIEWS list (Search / Installed / Updates).
-pub const VIEW_COUNT: usize = 3;
+/// Number of entries in the sidebar VIEWS list (Search / Manage).
+pub const VIEW_COUNT: usize = 2;
 
 pub struct App {
     pub query: String,
@@ -106,14 +117,22 @@ pub struct App {
     pub results_selected: usize,
     pub detail_selected: usize,
     pub sidebar_selected: usize,
-    /// Explicitly-installed packages (`pacman -Qe`) for the Installed view.
+    /// All installed packages (`pacman -Qn` + `-Qm`) for the Manage view.
     pub installed_list: Vec<InstalledPkg>,
     pub installed_selected: usize,
-    /// Upgradable packages (repos + AUR) for the Updates view.
+    /// Manage-view filter text. Kept separate from `query` so each tab keeps its
+    /// own search box contents.
+    pub manage_filter: String,
+    /// Upgradable packages (repos + AUR); drives the scope chips and `↑` markers.
     pub updates_list: Vec<UpdateEntry>,
-    pub updates_selected: usize,
-    /// Whether `yay` is present, so Upgrade can target it (repos + AUR).
-    pub has_yay: bool,
+    /// Selected upgrade-scope chip: 0 = All, 1..=n = the nth present source.
+    pub upgrade_scope_selected: usize,
+    /// Navigate mode (hover panels) vs interact mode (act inside the focused
+    /// panel). Enter/Space activates the hovered panel; Esc steps back out.
+    pub interacting: bool,
+    /// Whether `checkupdates` is available (else update counts are stale until a
+    /// real `pacman -Sy`).
+    pub has_checkupdates: bool,
     pub confirm: Option<ActionSpec>,
     pub confirm_note: Option<String>,
     pub task: Option<ActiveTask>,
@@ -127,9 +146,6 @@ pub struct App {
 
 impl App {
     pub fn new(source_ids: Vec<SourceId>) -> Self {
-        // The AUR source is only enabled when yay is installed, so its presence
-        // is a reliable proxy for "yay available" (used by the Upgrade action).
-        let has_yay = source_ids.contains(&SourceId::Aur);
         let source_status = source_ids
             .into_iter()
             .map(|id| (id, SourceState::Done(0)))
@@ -152,9 +168,11 @@ impl App {
             sidebar_selected: 0,
             installed_list: Vec::new(),
             installed_selected: 0,
+            manage_filter: String::new(),
             updates_list: Vec::new(),
-            updates_selected: 0,
-            has_yay,
+            upgrade_scope_selected: 0,
+            interacting: true,
+            has_checkupdates: false,
             confirm: None,
             confirm_note: None,
             task: None,
@@ -202,7 +220,7 @@ impl App {
     // --- Options overlay ---
 
     /// Number of option rows.
-    pub const OPTIONS_COUNT: usize = 3;
+    pub const OPTIONS_COUNT: usize = 4;
 
     pub fn move_options(&mut self, delta: i32) {
         let max = Self::OPTIONS_COUNT as i32 - 1;
@@ -215,6 +233,7 @@ impl App {
             0 => self.settings.show_hotkeys = !self.settings.show_hotkeys,
             1 => self.settings.collapse_repos = !self.settings.collapse_repos,
             2 => self.settings.debounce_ms = next_debounce(self.settings.debounce_ms),
+            3 => self.settings.remove_depth = self.settings.remove_depth.next(),
             _ => {}
         }
         self.settings.save();
@@ -225,52 +244,61 @@ impl App {
         self.task.is_some() && self.task_view != TaskView::Hidden
     }
 
-    /// Panes that can hold focus right now, in Tab order.
-    fn visible_panes(&self) -> Vec<Focus> {
-        let mut panes = vec![Focus::Search, Focus::Sidebar, Focus::Main];
-        if self.task_pane_visible() {
-            panes.push(Focus::TaskPane);
-        }
-        panes
+    /// Is `f` the focused panel and currently being interacted with (active)?
+    pub fn is_active(&self, f: Focus) -> bool {
+        self.focus == f && self.interacting
     }
 
-    /// Horizontal body row (left → right), used for h/l / arrow movement.
-    fn body_panes(&self) -> Vec<Focus> {
-        let mut panes = vec![Focus::Sidebar, Focus::Main];
-        if self.task_pane_visible() {
-            panes.push(Focus::TaskPane);
-        }
-        panes
+    /// Is `f` the focused panel but only hovered (navigate mode)?
+    pub fn is_hovered(&self, f: Focus) -> bool {
+        self.focus == f && !self.interacting
     }
 
-    pub fn focus_next(&mut self) {
-        let panes = self.visible_panes();
-        let i = panes.iter().position(|f| *f == self.focus).unwrap_or(0);
-        self.focus = panes[(i + 1) % panes.len()];
-    }
-
-    pub fn focus_prev(&mut self) {
-        let panes = self.visible_panes();
-        let i = panes.iter().position(|f| *f == self.focus).unwrap_or(0);
-        self.focus = panes[(i + panes.len() - 1) % panes.len()];
-    }
-
-    pub fn focus_left(&mut self) {
-        let panes = self.body_panes();
-        match panes.iter().position(|f| *f == self.focus) {
-            Some(i) if i > 0 => self.focus = panes[i - 1],
-            None => self.focus = Focus::Main, // coming from Search
-            _ => {}
+    /// The top content panel for the active view (where Search/Sidebar lead).
+    pub fn content_top(&self) -> Focus {
+        match self.active_view {
+            ActiveView::Search => Focus::Main,
+            ActiveView::Manage => Focus::Scope,
         }
     }
 
-    pub fn focus_right(&mut self) {
-        let panes = self.body_panes();
-        match panes.iter().position(|f| *f == self.focus) {
-            Some(i) if i + 1 < panes.len() => self.focus = panes[i + 1],
-            None => self.focus = Focus::Main, // coming from Search
-            _ => {}
+    /// The panel to land on when entering a view (browsing target).
+    pub fn content_landing(&self) -> Focus {
+        match self.active_view {
+            ActiveView::Search => Focus::Main,
+            ActiveView::Manage => Focus::List,
         }
+    }
+
+    /// Move the hovered panel (navigate mode). Layout: Search on top, Sidebar on
+    /// the left, content on the right (Manage splits into Scope over List).
+    pub fn hover_move(&mut self, dir: Dir) {
+        let top = self.content_top();
+        let next = match (self.focus, dir) {
+            (Focus::Search, Dir::Down) => top,
+            (Focus::Search, Dir::Left) => Focus::Sidebar,
+
+            (Focus::Sidebar, Dir::Up) => Focus::Search,
+            (Focus::Sidebar, Dir::Right) => top,
+
+            (Focus::Main, Dir::Up) => Focus::Search,
+            (Focus::Main, Dir::Left) => Focus::Sidebar,
+            (Focus::Main, Dir::Right) if self.task_pane_visible() => Focus::TaskPane,
+
+            (Focus::Scope, Dir::Up) => Focus::Search,
+            (Focus::Scope, Dir::Left) => Focus::Sidebar,
+            (Focus::Scope, Dir::Down) => Focus::List,
+            (Focus::Scope, Dir::Right) if self.task_pane_visible() => Focus::TaskPane,
+
+            (Focus::List, Dir::Up) => Focus::Scope,
+            (Focus::List, Dir::Left) => Focus::Sidebar,
+            (Focus::List, Dir::Right) if self.task_pane_visible() => Focus::TaskPane,
+
+            (Focus::TaskPane, Dir::Left) => self.content_landing(),
+
+            (f, _) => f,
+        };
+        self.focus = next;
     }
 
     pub fn move_sidebar(&mut self, delta: i32) {
@@ -284,7 +312,8 @@ impl App {
         self.task = None;
         self.task_view = TaskView::Hidden;
         if self.focus == Focus::TaskPane {
-            self.focus = Focus::Main;
+            self.focus = self.content_landing();
+            self.interacting = false;
         }
     }
 
@@ -343,65 +372,163 @@ impl App {
 
     // --- sidebar VIEWS ---
 
-    /// Activate the view highlighted in the sidebar and reset its selection.
+    /// Activate the view highlighted in the sidebar.
     pub fn select_sidebar_view(&mut self) {
         self.active_view = ActiveView::from_index(self.sidebar_selected);
-        match self.active_view {
-            ActiveView::Installed => {
-                self.installed_selected = self
-                    .installed_selected
-                    .min(self.installed_list.len().saturating_sub(1));
-            }
-            ActiveView::Updates => {
-                self.updates_selected = self
-                    .updates_selected
-                    .min(self.updates_list.len().saturating_sub(1));
-            }
-            ActiveView::Search => {}
+        if self.active_view == ActiveView::Manage {
+            self.clamp_installed();
         }
     }
 
-    // --- Installed view ---
-
-    pub fn selected_installed(&self) -> Option<&InstalledPkg> {
-        self.installed_list.get(self.installed_selected)
+    /// Toggle between the Search and Manage views (the `Tab` key). Lands ready to
+    /// type in Search, or browsing the list in Manage.
+    pub fn toggle_view(&mut self) {
+        self.active_view = match self.active_view {
+            ActiveView::Search => ActiveView::Manage,
+            ActiveView::Manage => ActiveView::Search,
+        };
+        self.sidebar_selected = self.active_view.index();
+        match self.active_view {
+            ActiveView::Search => {
+                self.focus = Focus::Search;
+                self.interacting = true;
+            }
+            ActiveView::Manage => {
+                self.focus = Focus::List;
+                self.interacting = false;
+                self.clamp_installed();
+            }
+        }
     }
 
-    /// Move the Installed-view selection by delta, clamped to the list.
+    // --- Manage view: installed list ---
+
+    /// New version available for `name`, if any (drives the `↑` marker).
+    pub fn update_for(&self, name: &str) -> Option<&str> {
+        self.updates_list
+            .iter()
+            .find(|u| u.name == name)
+            .map(|u| u.new_version.as_str())
+    }
+
+    /// The text the search bar is currently editing, which depends on the active
+    /// view (online search vs Manage filter). Each view keeps its own.
+    pub fn search_text(&self) -> &str {
+        match self.active_view {
+            ActiveView::Search => &self.query,
+            ActiveView::Manage => &self.manage_filter,
+        }
+    }
+
+    /// The installed packages to show in the Manage list: filtered by the
+    /// Manage filter (case-insensitive substring), with upgradable packages
+    /// floated to the top.
+    pub fn manage_rows(&self) -> Vec<&InstalledPkg> {
+        let q = self.manage_filter.to_ascii_lowercase();
+        let updates: std::collections::HashSet<&str> =
+            self.updates_list.iter().map(|u| u.name.as_str()).collect();
+        let mut rows: Vec<&InstalledPkg> = self
+            .installed_list
+            .iter()
+            .filter(|p| q.is_empty() || p.name.to_ascii_lowercase().contains(&q))
+            .collect();
+        rows.sort_by(|a, b| {
+            let (au, bu) = (updates.contains(a.name.as_str()), updates.contains(b.name.as_str()));
+            bu.cmp(&au).then_with(|| a.name.cmp(&b.name))
+        });
+        rows
+    }
+
+    /// The selected installed package (indexes the filtered/sorted rows).
+    pub fn selected_installed(&self) -> Option<InstalledPkg> {
+        self.manage_rows().get(self.installed_selected).map(|p| (*p).clone())
+    }
+
+    /// Move the Manage-list selection by delta, clamped to the visible rows.
     pub fn move_installed(&mut self, delta: i32) {
-        self.installed_selected = clamp_index(self.installed_selected, delta, self.installed_list.len());
+        self.installed_selected = clamp_index(self.installed_selected, delta, self.manage_rows().len());
     }
 
-    /// Build a Remove spec for the selected installed package, or None if the
-    /// list is empty. `recursive` chooses `-Rns` over plain `-R`.
-    pub fn remove_spec(&self, recursive: bool) -> Option<ActionSpec> {
+    /// Clamp the list selection into the current (possibly filtered) row range.
+    pub fn clamp_installed(&mut self) {
+        let n = self.manage_rows().len();
+        self.installed_selected = self.installed_selected.min(n.saturating_sub(1));
+    }
+
+    /// Build a Remove spec for the selected installed package (using the
+    /// depth configured in Options), or None if nothing is selected.
+    pub fn remove_spec(&self) -> Option<ActionSpec> {
         let pkg = self.selected_installed()?;
         Some(ActionSpec {
             targets: vec![pkg.name.clone()],
             source_id: SourceId::Pacman,
-            action: Action::Remove { recursive },
-            command: remove_command(&pkg.name, recursive),
+            action: Action::Remove,
+            command: remove_command(&pkg.name, self.settings.remove_depth),
         })
     }
 
-    // --- Updates view ---
+    // --- upgrade scope selector ---
 
-    pub fn selected_update(&self) -> Option<&UpdateEntry> {
-        self.updates_list.get(self.updates_selected)
+    /// Present sources in detection order (the basis for the scope chips).
+    pub fn present_sources(&self) -> Vec<SourceId> {
+        self.source_status.iter().map(|(id, _)| *id).collect()
     }
 
-    /// Move the Updates-view selection by delta, clamped to the list.
-    pub fn move_updates(&mut self, delta: i32) {
-        self.updates_selected = clamp_index(self.updates_selected, delta, self.updates_list.len());
+    /// Number of scope chips: All + one per present source.
+    pub fn upgrade_scope_count(&self) -> usize {
+        1 + self.source_status.len()
     }
 
-    /// Build the "upgrade everything" spec. Uses yay when present (repos + AUR).
+    /// Move the selected scope chip, clamped to the chip range.
+    pub fn move_upgrade_scope(&mut self, delta: i32) {
+        self.upgrade_scope_selected =
+            clamp_index(self.upgrade_scope_selected, delta, self.upgrade_scope_count());
+    }
+
+    /// Label for scope chip `i` (0 = "All", else the source badge).
+    pub fn upgrade_scope_label(&self, i: usize) -> &'static str {
+        match i {
+            0 => "All",
+            n => self
+                .present_sources()
+                .get(n - 1)
+                .map(|id| id.badge())
+                .unwrap_or("?"),
+        }
+    }
+
+    /// Pending-update count for scope chip `i` (All = every pending update).
+    pub fn upgrade_scope_pending(&self, i: usize) -> usize {
+        match i {
+            0 => self.updates_list.len(),
+            n => match self.present_sources().get(n - 1) {
+                Some(id) => self.updates_list.iter().filter(|u| u.source_id == *id).count(),
+                None => 0,
+            },
+        }
+    }
+
+    /// Build the upgrade spec for the selected scope chip. Chip 0 ("All") chains
+    /// every present source's upgrade into one task; a source chip upgrades just
+    /// that source.
     pub fn upgrade_spec(&self) -> ActionSpec {
-        ActionSpec {
-            targets: vec!["all".to_string()],
-            source_id: if self.has_yay { SourceId::Aur } else { SourceId::Pacman },
-            action: Action::Upgrade,
-            command: upgrade_command(self.has_yay),
+        let sources = self.present_sources();
+        if self.upgrade_scope_selected == 0 || self.upgrade_scope_selected > sources.len() {
+            let cmds: Vec<_> = sources.iter().map(|id| source_upgrade_command(*id)).collect();
+            ActionSpec {
+                targets: vec!["all".to_string()],
+                source_id: sources.first().copied().unwrap_or(SourceId::Pacman),
+                action: Action::Upgrade,
+                command: chain_commands(&cmds),
+            }
+        } else {
+            let id = sources[self.upgrade_scope_selected - 1];
+            ActionSpec {
+                targets: vec![id.badge().to_string()],
+                source_id: id,
+                action: Action::Upgrade,
+                command: source_upgrade_command(id),
+            }
         }
     }
 
@@ -432,6 +559,10 @@ mod tests {
         }
     }
 
+    fn ipkg(name: &str) -> InstalledPkg {
+        InstalledPkg { name: name.into(), version: "1".into(), origin: "repo".into() }
+    }
+
     #[test]
     fn start_query_bumps_id_and_clears() {
         let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
@@ -460,33 +591,73 @@ mod tests {
 
     #[test]
     fn active_view_index_roundtrip() {
-        for v in [ActiveView::Search, ActiveView::Installed, ActiveView::Updates] {
+        for v in [ActiveView::Search, ActiveView::Manage] {
             assert_eq!(ActiveView::from_index(v.index()), v);
         }
         assert_eq!(ActiveView::from_index(99), ActiveView::Search);
     }
 
     #[test]
-    fn select_sidebar_view_switches_active_view() {
+    fn toggle_view_flips_search_and_manage() {
         let mut app = App::new(vec![SourceId::Pacman]);
-        app.sidebar_selected = 1;
-        app.select_sidebar_view();
-        assert_eq!(app.active_view, ActiveView::Installed);
-        app.sidebar_selected = 2;
-        app.select_sidebar_view();
-        assert_eq!(app.active_view, ActiveView::Updates);
-        app.sidebar_selected = 0;
-        app.select_sidebar_view();
         assert_eq!(app.active_view, ActiveView::Search);
+        app.toggle_view();
+        assert_eq!(app.active_view, ActiveView::Manage);
+        assert_eq!(app.focus, Focus::List);
+        assert!(!app.interacting); // lands in navigate mode, browsing
+        app.toggle_view();
+        assert_eq!(app.active_view, ActiveView::Search);
+        assert_eq!(app.focus, Focus::Search);
+        assert!(app.interacting); // ready to type
+    }
+
+    #[test]
+    fn hover_move_navigates_panels() {
+        let mut app = App::new(vec![SourceId::Pacman]);
+        // Search view: Search → Main → Sidebar
+        app.focus = Focus::Search;
+        app.hover_move(Dir::Down);
+        assert_eq!(app.focus, Focus::Main);
+        app.hover_move(Dir::Left);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.hover_move(Dir::Up);
+        assert_eq!(app.focus, Focus::Search);
+        // Manage view: Search → Scope → List
+        app.active_view = ActiveView::Manage;
+        app.focus = Focus::Search;
+        app.hover_move(Dir::Down);
+        assert_eq!(app.focus, Focus::Scope);
+        app.hover_move(Dir::Down);
+        assert_eq!(app.focus, Focus::List);
+        app.hover_move(Dir::Up);
+        assert_eq!(app.focus, Focus::Scope);
+    }
+
+    #[test]
+    fn manage_rows_filter_and_float_updates() {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        app.installed_list = vec![ipkg("alpha"), ipkg("firefox"), ipkg("firewalld"), ipkg("zoxide")];
+        app.updates_list = vec![UpdateEntry {
+            name: "firewalld".into(),
+            old_version: "1".into(),
+            new_version: "2".into(),
+            source_id: SourceId::Pacman,
+        }];
+        // no filter: upgradable floats to top, rest alphabetical
+        let rows: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(rows, vec!["firewalld", "alpha", "firefox", "zoxide"]);
+        assert_eq!(app.update_for("firewalld"), Some("2"));
+        assert_eq!(app.update_for("firefox"), None);
+        // filter narrows to the two "fire*" names (firewalld still first)
+        app.manage_filter = "fire".into();
+        let rows: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(rows, vec!["firewalld", "firefox"]);
     }
 
     #[test]
     fn installed_selection_clamps_and_reads() {
         let mut app = App::new(vec![SourceId::Pacman]);
-        app.installed_list = vec![
-            InstalledPkg { name: "a".into(), version: "1".into() },
-            InstalledPkg { name: "b".into(), version: "2".into() },
-        ];
+        app.installed_list = vec![ipkg("a"), ipkg("b")];
         app.move_installed(-5);
         assert_eq!(app.installed_selected, 0);
         app.move_installed(10);
@@ -495,34 +666,67 @@ mod tests {
     }
 
     #[test]
-    fn remove_spec_uses_selected_installed_package() {
+    fn remove_spec_uses_configured_depth() {
         let mut app = App::new(vec![SourceId::Pacman]);
-        app.installed_list = vec![InstalledPkg { name: "firefox".into(), version: "1".into() }];
-        let spec = app.remove_spec(false).expect("spec");
+        app.installed_list = vec![ipkg("firefox")];
+        let spec = app.remove_spec().expect("spec");
         assert_eq!(spec.targets, vec!["firefox"]);
-        assert_eq!(spec.action, Action::Remove { recursive: false });
-        assert_eq!(spec.command.args, vec!["pacman", "-R", "firefox"]);
+        assert_eq!(spec.action, Action::Remove);
+        // default depth is -Rs
+        assert_eq!(spec.command.args, vec!["pacman", "-Rs", "firefox"]);
 
-        let recursive = app.remove_spec(true).expect("spec");
-        assert_eq!(recursive.action, Action::Remove { recursive: true });
-        assert_eq!(recursive.command.args, vec!["pacman", "-Rns", "firefox"]);
+        app.settings.remove_depth = crate::model::RemoveDepth::Purge;
+        let purge = app.remove_spec().expect("spec");
+        assert_eq!(purge.command.args, vec!["pacman", "-Rns", "firefox"]);
     }
 
     #[test]
     fn remove_spec_none_when_list_empty() {
         let app = App::new(vec![SourceId::Pacman]);
-        assert!(app.remove_spec(false).is_none());
+        assert!(app.remove_spec().is_none());
     }
 
     #[test]
-    fn upgrade_spec_targets_yay_when_present() {
-        let with_yay = App::new(vec![SourceId::Pacman, SourceId::Aur]);
-        let spec = with_yay.upgrade_spec();
-        assert_eq!(spec.action, Action::Upgrade);
-        assert_eq!(spec.command.program, "yay");
+    fn upgrade_spec_all_chains_present_sources() {
+        let app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        // chip 0 = All
+        let all = app.upgrade_spec();
+        assert_eq!(all.action, Action::Upgrade);
+        assert_eq!(all.command.program, "sh");
+        assert_eq!(all.command.args[1], "sudo pacman -Syu && yay -Sua");
+    }
 
-        let no_yay = App::new(vec![SourceId::Pacman]);
-        assert_eq!(no_yay.upgrade_spec().command.program, "sudo");
+    #[test]
+    fn upgrade_spec_single_source_scope() {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        // chips: [All, repo, aur]
+        assert_eq!(app.upgrade_scope_count(), 3);
+        app.upgrade_scope_selected = 2; // aur
+        let spec = app.upgrade_spec();
+        assert_eq!(spec.source_id, SourceId::Aur);
+        assert_eq!(spec.command.program, "yay");
+        assert_eq!(spec.command.args, vec!["-Sua"]);
+    }
+
+    #[test]
+    fn upgrade_scope_pending_counts_per_source() {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let upd = |name: &str, src| UpdateEntry {
+            name: name.into(),
+            old_version: "1".into(),
+            new_version: "2".into(),
+            source_id: src,
+        };
+        app.updates_list = vec![
+            upd("a", SourceId::Pacman),
+            upd("b", SourceId::Pacman),
+            upd("c", SourceId::Aur),
+        ];
+        assert_eq!(app.upgrade_scope_pending(0), 3); // All
+        assert_eq!(app.upgrade_scope_pending(1), 2); // repo
+        assert_eq!(app.upgrade_scope_pending(2), 1); // aur
+        assert_eq!(app.upgrade_scope_label(1), "repo");
+        assert_eq!(app.upgrade_scope_label(2), "aur");
     }
 
     #[test]

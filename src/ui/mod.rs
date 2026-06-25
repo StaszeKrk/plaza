@@ -70,8 +70,8 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
         Action::Install => {
             format!("Install {} from {}", spec.targets.join(", "), spec.source_id.badge())
         }
-        Action::Remove { .. } => format!("Remove {}", spec.targets.join(", ")),
-        Action::Upgrade => "Upgrade all packages".to_string(),
+        Action::Remove => format!("Remove {}", spec.targets.join(", ")),
+        Action::Upgrade => format!("Upgrade {} packages", spec.targets.join(", ")),
     };
     let mut lines: Vec<String> = vec![headline, format!("via: {}", cmd)];
     if let Some(note) = &app.confirm_note {
@@ -88,12 +88,7 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
     lines.push(String::new());
-    // For Remove, offer the deeper -Rns variant on a separate key.
-    if matches!(spec.action, Action::Remove { .. }) {
-        lines.push("[y] remove   [r] remove + deps & config (-Rns)   [n/esc] cancel".to_string());
-    } else {
-        lines.push("[y] confirm   [n/esc] cancel".to_string());
-    }
+    lines.push("[y] confirm   [n/esc] cancel".to_string());
 
     let title = format!(" confirm {} ", spec.action.verb());
     let height = lines.len() as u16 + 2; // + borders
@@ -136,6 +131,10 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
         row(
             sel == 2,
             format!("    Search delay: {}ms", app.settings.debounce_ms),
+        ),
+        row(
+            sel == 3,
+            format!("    Remove depth: {}", app.settings.remove_depth.label()),
         ),
         Line::from(""),
         Line::from(Span::styled(

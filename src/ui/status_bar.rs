@@ -29,16 +29,23 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if app.settings.show_hotkeys {
-        let keys = match app.focus {
-            Focus::Search => "type to search  ⏎/esc list",
-            _ => match app.active_view {
-                ActiveView::Search => match app.main_view {
-                    MainView::Results => "↑↓ move  ⏎ open  / search  o options  q quit",
-                    MainView::Detail => "↑↓ source  ⏎ install  esc back  o options",
+        let manage = app.active_view == ActiveView::Manage;
+        let keys = if !app.interacting {
+            // navigate mode: moving the hovered panel
+            "navigate · ↑↓←→ move · ⏎ focus · / search · ⇥ view · o opts · q quit"
+        } else {
+            match app.focus {
+                Focus::Search if manage => "filter · type · ⏎ list · esc back",
+                Focus::Search => "search · type · ⏎ results · esc back",
+                Focus::Sidebar => "↑↓ pick view · ⏎ open · esc back",
+                Focus::Main => match app.main_view {
+                    MainView::Results => "↑↓ move · ⏎ detail · esc back",
+                    MainView::Detail => "↑↓ source · ⏎ install · esc results",
                 },
-                ActiveView::Installed => "↑↓ move  ⏎ remove  / search  o options  q quit",
-                ActiveView::Updates => "↑↓ move  ⏎ upgrade all  / search  o options  q quit",
-            },
+                Focus::Scope => "h/l scope · ⏎ upgrade · esc back",
+                Focus::List => "↑↓ move · ⏎/r remove · esc back",
+                Focus::TaskPane => "task pane · `=collapse",
+            }
         };
         parts.push(keys.to_string());
     }

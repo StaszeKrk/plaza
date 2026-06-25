@@ -5,10 +5,16 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Search;
-    let border = if focused { Color::Cyan } else { Color::DarkGray };
-    let cursor = if focused { "▏" } else { "" };
-    let p = Paragraph::new(format!("/ {}{}", app.query, cursor)).block(
+    let active = app.is_active(Focus::Search);
+    let border = if active {
+        Color::Cyan
+    } else if app.is_hovered(Focus::Search) {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    let cursor = if active { "▏" } else { "" };
+    let p = Paragraph::new(format!("/ {}{}", app.search_text(), cursor)).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border))

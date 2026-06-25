@@ -93,10 +93,9 @@ impl PackageRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Install,
-    /// Remove a package. `recursive` switches `-R` to `-Rns` (also drops
-    /// now-unneeded dependencies and config files).
-    Remove { recursive: bool },
-    /// Upgrade every installed package (repos, and the AUR when yay is present).
+    /// Remove a package. The depth (`-R`/`-Rs`/`-Rns`) comes from settings.
+    Remove,
+    /// Upgrade packages: a single source, or every source chained together.
     Upgrade,
 }
 
@@ -105,34 +104,101 @@ impl Action {
     pub fn verb(self) -> &'static str {
         match self {
             Action::Install => "install",
-            Action::Remove { .. } => "remove",
+            Action::Remove => "remove",
             Action::Upgrade => "upgrade",
         }
     }
 }
 
-/// Command that removes `name`. With `recursive`, uses `-Rns` to also drop
-/// now-unneeded dependencies and saved configuration; otherwise plain `-R`.
-pub fn remove_command(name: &str, recursive: bool) -> CommandLine {
-    let flag = if recursive { "-Rns" } else { "-R" };
-    CommandLine {
-        program: "sudo".into(),
-        args: vec!["pacman".into(), flag.into(), name.into()],
+/// How aggressively a removal cleans up. Maps to pacman's `-R` family. The
+/// default is `WithDeps` (`-Rs`); the user can change it in Options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RemoveDepth {
+    /// `-R`: remove only the named package.
+    Package,
+    /// `-Rs`: also remove now-unneeded dependencies.
+    WithDeps,
+    /// `-Rns`: also remove saved config (`.pacsave`) files.
+    Purge,
+}
+
+impl RemoveDepth {
+    pub fn flag(self) -> &'static str {
+        match self {
+            RemoveDepth::Package => "-R",
+            RemoveDepth::WithDeps => "-Rs",
+            RemoveDepth::Purge => "-Rns",
+        }
+    }
+
+    /// Short label for the options overlay.
+    pub fn label(self) -> &'static str {
+        match self {
+            RemoveDepth::Package => "package only (-R)",
+            RemoveDepth::WithDeps => "+ unused deps (-Rs)",
+            RemoveDepth::Purge => "+ deps + config (-Rns)",
+        }
+    }
+
+    /// Cycle order for the options overlay.
+    pub fn next(self) -> RemoveDepth {
+        match self {
+            RemoveDepth::WithDeps => RemoveDepth::Purge,
+            RemoveDepth::Purge => RemoveDepth::Package,
+            RemoveDepth::Package => RemoveDepth::WithDeps,
+        }
     }
 }
 
-/// Command that upgrades everything. `yay -Syu` when yay is present (covers
-/// repos and the AUR), otherwise `sudo pacman -Syu` for repos only.
-pub fn upgrade_command(has_yay: bool) -> CommandLine {
-    if has_yay {
-        CommandLine {
-            program: "yay".into(),
-            args: vec!["-Syu".into()],
-        }
-    } else {
-        CommandLine {
+/// Command that removes `name` at the given depth. Removal goes through pacman
+/// for both native and foreign (AUR) packages; a foreign package is still
+/// tracked in the local db.
+pub fn remove_command(name: &str, depth: RemoveDepth) -> CommandLine {
+    CommandLine {
+        program: "sudo".into(),
+        args: vec!["pacman".into(), depth.flag().into(), name.into()],
+    }
+}
+
+/// The full-upgrade command for a single source.
+/// - pacman: `sudo pacman -Syu` (sync + upgrade the repos)
+/// - aur:    `yay -Sua` (upgrade AUR packages only)
+pub fn source_upgrade_command(source_id: SourceId) -> CommandLine {
+    match source_id {
+        SourceId::Pacman => CommandLine {
             program: "sudo".into(),
             args: vec!["pacman".into(), "-Syu".into()],
+        },
+        SourceId::Aur => CommandLine {
+            program: "yay".into(),
+            args: vec!["-Sua".into()],
+        },
+    }
+}
+
+/// Chain commands into one `sh -c "a && b"` so they run as a single PTY task
+/// (used by "upgrade all" to upgrade each source in order). A single command is
+/// returned unwrapped; an empty slice yields a harmless `true`.
+pub fn chain_commands(cmds: &[CommandLine]) -> CommandLine {
+    match cmds {
+        [] => CommandLine { program: "true".into(), args: vec![] },
+        [one] => one.clone(),
+        many => {
+            let joined = many
+                .iter()
+                .map(|c| {
+                    if c.args.is_empty() {
+                        c.program.clone()
+                    } else {
+                        format!("{} {}", c.program, c.args.join(" "))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" && ");
+            CommandLine {
+                program: "sh".into(),
+                args: vec!["-c".into(), joined],
+            }
         }
     }
 }
@@ -227,31 +293,58 @@ mod tests {
     }
 
     #[test]
-    fn remove_command_default_and_recursive() {
-        let plain = remove_command("firefox", false);
-        assert_eq!(plain.program, "sudo");
-        assert_eq!(plain.args, vec!["pacman", "-R", "firefox"]);
-
-        let recursive = remove_command("firefox", true);
-        assert_eq!(recursive.args, vec!["pacman", "-Rns", "firefox"]);
+    fn remove_command_uses_depth_flag() {
+        assert_eq!(
+            remove_command("firefox", RemoveDepth::WithDeps).args,
+            vec!["pacman", "-Rs", "firefox"]
+        );
+        assert_eq!(
+            remove_command("firefox", RemoveDepth::Package).args,
+            vec!["pacman", "-R", "firefox"]
+        );
+        assert_eq!(
+            remove_command("firefox", RemoveDepth::Purge).args,
+            vec!["pacman", "-Rns", "firefox"]
+        );
     }
 
     #[test]
-    fn upgrade_command_prefers_yay() {
-        let with_yay = upgrade_command(true);
-        assert_eq!(with_yay.program, "yay");
-        assert_eq!(with_yay.args, vec!["-Syu"]);
+    fn remove_depth_cycles() {
+        assert_eq!(RemoveDepth::WithDeps.next(), RemoveDepth::Purge);
+        assert_eq!(RemoveDepth::Purge.next(), RemoveDepth::Package);
+        assert_eq!(RemoveDepth::Package.next(), RemoveDepth::WithDeps);
+    }
 
-        let no_yay = upgrade_command(false);
-        assert_eq!(no_yay.program, "sudo");
-        assert_eq!(no_yay.args, vec!["pacman", "-Syu"]);
+    #[test]
+    fn source_upgrade_commands() {
+        assert_eq!(
+            source_upgrade_command(SourceId::Pacman).args,
+            vec!["pacman", "-Syu"]
+        );
+        let aur = source_upgrade_command(SourceId::Aur);
+        assert_eq!(aur.program, "yay");
+        assert_eq!(aur.args, vec!["-Sua"]);
+    }
+
+    #[test]
+    fn chain_commands_single_and_many() {
+        let pac = source_upgrade_command(SourceId::Pacman);
+        let aur = source_upgrade_command(SourceId::Aur);
+        // single → unwrapped
+        assert_eq!(chain_commands(std::slice::from_ref(&pac)), pac);
+        // many → sh -c "a && b"
+        let all = chain_commands(&[pac, aur]);
+        assert_eq!(all.program, "sh");
+        assert_eq!(
+            all.args,
+            vec!["-c".to_string(), "sudo pacman -Syu && yay -Sua".to_string()]
+        );
     }
 
     #[test]
     fn action_verbs() {
         assert_eq!(Action::Install.verb(), "install");
-        assert_eq!(Action::Remove { recursive: false }.verb(), "remove");
-        assert_eq!(Action::Remove { recursive: true }.verb(), "remove");
+        assert_eq!(Action::Remove.verb(), "remove");
         assert_eq!(Action::Upgrade.verb(), "upgrade");
     }
 

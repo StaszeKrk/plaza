@@ -1,3 +1,4 @@
+use crate::model::SourceId;
 use crate::sources::installed::count_lines;
 
 /// Count the package-update lines emitted by `checkupdates`, `pacman -Qu`, or
@@ -6,18 +7,20 @@ pub fn parse_update_count(output: &str) -> usize {
     count_lines(output)
 }
 
-/// One upgradable package with its current and target version.
+/// One upgradable package with its current and target version, tagged with the
+/// source it came from (repos vs AUR).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateEntry {
     pub name: String,
     pub old_version: String,
     pub new_version: String,
+    pub source_id: SourceId,
 }
 
-/// Parse the update list emitted by `checkupdates`, `pacman -Qu`, or `yay -Qua`.
-/// Each non-empty line is `name old -> new`; versions default to empty when a
-/// line does not follow that shape.
-pub fn parse_update_list(output: &str) -> Vec<UpdateEntry> {
+/// Parse the update list emitted by `checkupdates`, `pacman -Qu`, or `yay -Qua`,
+/// tagging every entry with `source_id`. Each non-empty line is `name old ->
+/// new`; versions default to empty when a line does not follow that shape.
+pub fn parse_update_list(output: &str, source_id: SourceId) -> Vec<UpdateEntry> {
     output
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -37,6 +40,7 @@ pub fn parse_update_list(output: &str) -> Vec<UpdateEntry> {
                 name: name.to_string(),
                 old_version,
                 new_version,
+                source_id,
             })
         })
         .collect()
@@ -56,11 +60,12 @@ mod tests {
     #[test]
     fn parses_update_list_with_arrow() {
         let out = "firefox 140.0-1 -> 141.0-1\nlinux 6.9 -> 6.10\n\n";
-        let list = parse_update_list(out);
+        let list = parse_update_list(out, SourceId::Pacman);
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].name, "firefox");
         assert_eq!(list[0].old_version, "140.0-1");
         assert_eq!(list[0].new_version, "141.0-1");
+        assert_eq!(list[0].source_id, SourceId::Pacman);
         assert_eq!(list[1].name, "linux");
         assert_eq!(list[1].new_version, "6.10");
     }
@@ -69,11 +74,12 @@ mod tests {
     fn parses_update_list_without_arrow() {
         // `pacman -Qu` without the arrow form still yields a name and old version.
         let out = "firefox 141.0-1\n";
-        let list = parse_update_list(out);
+        let list = parse_update_list(out, SourceId::Aur);
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "firefox");
         assert_eq!(list[0].old_version, "141.0-1");
         assert_eq!(list[0].new_version, "");
-        assert!(parse_update_list("").is_empty());
+        assert_eq!(list[0].source_id, SourceId::Aur);
+        assert!(parse_update_list("", SourceId::Pacman).is_empty());
     }
 }

@@ -1,6 +1,6 @@
 use crate::app::{App, Focus};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
@@ -10,8 +10,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(Block::default().borders(Borders::ALL).title(" detail "), area);
         return;
     };
-    let focused = app.focus == Focus::Main;
-    let border = if focused { Color::Cyan } else { Color::DarkGray };
+    let border = crate::ui::main_view::block_color(app, Focus::Main);
 
     let header = Paragraph::new(vec![
         Line::from(Span::styled(

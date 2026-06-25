@@ -33,28 +33,58 @@ pub fn count_lines(output: &str) -> usize {
     output.lines().filter(|l| !l.trim().is_empty()).count()
 }
 
-/// One explicitly-installed package, name and version.
+/// One installed package: name, version, and where it came from (a repo name
+/// like "extra" or "aur" for foreign packages).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledPkg {
     pub name: String,
     pub version: String,
+    pub origin: String,
 }
 
-/// Parse `pacman -Qe` output (`name version` per line) into a sorted list of
-/// explicitly-installed packages. `-Qe` already sorts by name; we keep it.
-pub fn parse_explicit_list(output: &str) -> Vec<InstalledPkg> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let name = parts.next()?;
-            let version = parts.next().unwrap_or_default();
-            Some(InstalledPkg {
-                name: name.to_string(),
-                version: version.to_string(),
+/// Build a `name -> repo` map from `pacman -Sl` output (`repo name version
+/// [installed]` per line). `-Sl` lists repos in priority order, so the first
+/// occurrence of a name is the repo it actually came from.
+pub fn parse_sync_repos(sl_output: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for line in sl_output.lines() {
+        let mut parts = line.split_whitespace();
+        if let (Some(repo), Some(name)) = (parts.next(), parts.next()) {
+            map.entry(name.to_string()).or_insert_with(|| repo.to_string());
+        }
+    }
+    map
+}
+
+/// Build the full installed list from `pacman -Qn` (native) and `-Qm` (foreign),
+/// labelling each native package with its repo (via `repos`) and each foreign
+/// package as "aur". Sorted by name.
+pub fn parse_installed_list(
+    native: &str,
+    foreign: &str,
+    repos: &HashMap<String, String>,
+) -> Vec<InstalledPkg> {
+    let parse = |output: &str, foreign: bool| -> Vec<InstalledPkg> {
+        output
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split_whitespace();
+                let name = parts.next()?;
+                let version = parts.next().unwrap_or_default().to_string();
+                let origin = if foreign {
+                    "aur".to_string()
+                } else {
+                    repos.get(name).cloned().unwrap_or_else(|| "repo".to_string())
+                };
+                Some(InstalledPkg { name: name.to_string(), version, origin })
             })
-        })
-        .collect()
+            .collect()
+    };
+
+    let mut list = parse(native, false);
+    list.extend(parse(foreign, true));
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    list
 }
 
 #[cfg(test)]
@@ -78,13 +108,29 @@ mod tests {
     }
 
     #[test]
-    fn parses_explicit_list() {
-        let out = "firefox 141.0-1\nneovim 0.10.2-1\n\n";
-        let list = parse_explicit_list(out);
-        assert_eq!(list.len(), 2);
+    fn parses_sync_repos_keeps_first_occurrence() {
+        let sl = "extra firefox 141.0-1 [installed]\nworld firefox 141.0-1\nextra neovim 0.10.2-1\n";
+        let repos = parse_sync_repos(sl);
+        // first occurrence (priority order) wins
+        assert_eq!(repos.get("firefox").map(String::as_str), Some("extra"));
+        assert_eq!(repos.get("neovim").map(String::as_str), Some("extra"));
+    }
+
+    #[test]
+    fn parses_installed_list_with_origin() {
+        let native = "firefox 141.0-1\nneovim 0.10.2-1\n";
+        let foreign = "yay 12.4.0-1\n";
+        let mut repos = HashMap::new();
+        repos.insert("firefox".to_string(), "extra".to_string());
+        let list = parse_installed_list(native, foreign, &repos);
+        assert_eq!(list.len(), 3);
+        // sorted by name: firefox, neovim, yay
         assert_eq!(list[0].name, "firefox");
-        assert_eq!(list[0].version, "141.0-1");
+        assert_eq!(list[0].origin, "extra");
         assert_eq!(list[1].name, "neovim");
-        assert!(parse_explicit_list("").is_empty());
+        assert_eq!(list[1].origin, "repo"); // unknown repo falls back
+        assert_eq!(list[2].name, "yay");
+        assert_eq!(list[2].origin, "aur"); // foreign
+        assert!(parse_installed_list("", "", &repos).is_empty());
     }
 }

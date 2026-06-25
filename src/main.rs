@@ -11,7 +11,7 @@ mod sources;
 mod ui;
 
 use crate::action::runner::{key_to_bytes, start_action, TaskState};
-use crate::app::{ActiveView, App, Focus, MainView, TaskView};
+use crate::app::{ActiveView, App, Dir, Focus, MainView, TaskView};
 use crate::event::AppEvent;
 use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
@@ -84,6 +84,9 @@ async fn run_tui() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(source_ids);
+    // `checkupdates` (pacman-contrib) syncs a private db so update counts stay
+    // live without root; without it we fall back to a stale `pacman -Qu`.
+    app.has_checkupdates = sources::which("checkupdates");
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
     spawn_input_task(tx.clone());
@@ -139,7 +142,12 @@ fn handle_event(
             }
         }
         AppEvent::DispatchSearch { gen } => {
-            if gen == app.debounce_gen && !app.query.is_empty() {
+            // Only run if still on the Search tab with a non-empty query (a
+            // pending debounce must not pull you back from Manage).
+            if gen == app.debounce_gen
+                && app.active_view == ActiveView::Search
+                && !app.query.is_empty()
+            {
                 let query_id = app.start_query(app.query.clone());
                 dispatch_search(app.query.clone(), query_id, sources, tx);
             }
@@ -155,15 +163,11 @@ fn handle_event(
         AppEvent::Installed(idx) => app.installed = idx,
         AppEvent::InstalledList(list) => {
             app.installed_list = list;
-            app.installed_selected = app
-                .installed_selected
-                .min(app.installed_list.len().saturating_sub(1));
+            app.clamp_installed();
         }
         AppEvent::UpdatesList(list) => {
             app.updates_list = list;
-            app.updates_selected = app
-                .updates_selected
-                .min(app.updates_list.len().saturating_sub(1));
+            app.clamp_installed();
         }
         AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
@@ -240,13 +244,18 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
         }
     });
 
-    // explicitly-installed list for the Installed view
+    // full installed list (native + foreign) with origin, for the Manage view
     let tx_list = tx.clone();
     tokio::spawn(async move {
-        if let Ok(out) = Command::new("pacman").arg("-Qe").output().await {
-            let list = sources::installed::parse_explicit_list(&String::from_utf8_lossy(&out.stdout));
-            let _ = tx_list.send(AppEvent::InstalledList(list));
-        }
+        let text = |out: std::io::Result<std::process::Output>| {
+            out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+        };
+        let native = text(Command::new("pacman").arg("-Qn").output().await);
+        let foreign = text(Command::new("pacman").arg("-Qm").output().await);
+        let sl = text(Command::new("pacman").arg("-Sl").output().await);
+        let repos = sources::installed::parse_sync_repos(&sl);
+        let list = sources::installed::parse_installed_list(&native, &foreign, &repos);
+        let _ = tx_list.send(AppEvent::InstalledList(list));
     });
 
     // best-effort update counts + list (repos and AUR)
@@ -261,10 +270,10 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>) {
 
         let mut list = Vec::new();
         if let Some(t) = &repo_text {
-            list.extend(sources::updates::parse_update_list(t));
+            list.extend(sources::updates::parse_update_list(t, SourceId::Pacman));
         }
         if let Some(t) = &aur_text {
-            list.extend(sources::updates::parse_update_list(t));
+            list.extend(sources::updates::parse_update_list(t, SourceId::Aur));
         }
         let _ = tx.send(AppEvent::UpdatesList(list));
     });
@@ -370,17 +379,8 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
 
     // Confirm modal next.
     if app.confirm.is_some() {
-        let is_remove = matches!(
-            app.confirm.as_ref().map(|s| s.action),
-            Some(Action::Remove { .. })
-        );
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => begin_install(app, tx),
-            // `r` upgrades a pending Remove to the deeper -Rns variant.
-            KeyCode::Char('r') | KeyCode::Char('R') if is_remove => {
-                promote_remove_recursive(app);
-                begin_install(app, tx);
-            }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.clear_confirm(),
             _ => {}
         }
@@ -406,9 +406,57 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
+    // Tab / Shift-Tab toggle between the Search and Manage views.
+    if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+        app.toggle_view();
+        if app.active_view == ActiveView::Manage {
+            spawn_stats_tasks(tx.clone());
+        }
+        return;
+    }
+
+    // `/` jumps straight to the search field (unless you are already typing).
+    if key.code == KeyCode::Char('/') && !(app.focus == Focus::Search && app.interacting) {
+        app.focus = Focus::Search;
+        app.interacting = true;
+        return;
+    }
+
+    // Two modes: navigate (move the hovered panel) and interact (act inside the
+    // focused panel). Enter/Space activates; Esc steps back out.
+    if app.interacting {
+        handle_interact_key(app, key, tx);
+    } else {
+        handle_navigate_key(app, key);
+    }
+}
+
+/// Navigate mode: arrows/hjkl move the hovered panel; Enter/Space activates it.
+fn handle_navigate_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('q') => try_quit(app),
+        KeyCode::Char('o') => {
+            app.options_open = true;
+            app.options_selected = 0;
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.hover_move(Dir::Up),
+        KeyCode::Down | KeyCode::Char('j') => app.hover_move(Dir::Down),
+        KeyCode::Left | KeyCode::Char('h') => app.hover_move(Dir::Left),
+        KeyCode::Right | KeyCode::Char('l') => app.hover_move(Dir::Right),
+        KeyCode::Enter | KeyCode::Char(' ') => app.interacting = true,
+        _ => {}
+    }
+}
+
+/// Interact mode: dispatch to the focused panel's handler.
+fn handle_interact_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     match app.focus {
-        Focus::Search => handle_search_key(app, key, tx),
-        _ => handle_browse_key(app, key),
+        Focus::Search => interact_search(app, key, tx),
+        Focus::Sidebar => interact_sidebar(app, key, tx),
+        Focus::Main => interact_main(app, key),
+        Focus::Scope => interact_scope(app, key),
+        Focus::List => interact_list(app, key),
+        Focus::TaskPane => {} // the task pane owns input via handle_task_pane_key
     }
 }
 
@@ -441,7 +489,8 @@ fn toggle_task_pane(app: &mut App) {
     match app.task_view {
         TaskView::Expanded => {
             app.task_view = TaskView::Peek;
-            app.focus = Focus::Main;
+            app.focus = app.content_landing();
+            app.interacting = false;
         }
         TaskView::Peek | TaskView::Hidden => {
             app.task_view = TaskView::Expanded;
@@ -486,17 +535,25 @@ fn handle_task_pane_key(app: &mut App, key: KeyEvent) {
                     app.dismiss_task();
                 } else {
                     app.task_view = TaskView::Hidden; // hide a running task
-                    app.focus = Focus::Main;
+                    app.focus = app.content_landing();
+                    app.interacting = false;
                 }
             }
-            KeyCode::Tab => app.focus_next(),
-            KeyCode::BackTab => app.focus_prev(),
-            KeyCode::Left | KeyCode::Char('h') => app.focus_left(),
-            KeyCode::Char('/') => app.focus = Focus::Search,
+            KeyCode::Left | KeyCode::Char('h') => {
+                app.focus = app.content_landing();
+                app.interacting = false;
+            }
+            KeyCode::Char('/') => {
+                app.focus = Focus::Search;
+                app.interacting = true;
+            }
             KeyCode::Char('q') => try_quit(app),
             _ => {}
         },
-        TaskView::Hidden => app.focus = Focus::Main, // not focusable while hidden
+        TaskView::Hidden => {
+            app.focus = app.content_landing();
+            app.interacting = false;
+        }
     }
 }
 
@@ -510,103 +567,72 @@ fn handle_options_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_search_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
+/// Interact: the search field. Typing searches (Search view) or filters the
+/// installed list (Manage view). Enter submits and hovers the results; Esc
+/// cancels back to navigate.
+fn interact_search(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
+    let filtering = app.active_view == ActiveView::Manage;
     match key.code {
         KeyCode::Char(c) => {
-            app.query.push(c);
-            schedule_debounced_search(app, tx);
+            if filtering {
+                app.manage_filter.push(c);
+                app.installed_selected = 0;
+            } else {
+                app.query.push(c);
+                schedule_debounced_search(app, tx);
+            }
         }
         KeyCode::Backspace => {
-            app.query.pop();
-            schedule_debounced_search(app, tx);
+            if filtering {
+                app.manage_filter.pop();
+                app.installed_selected = 0;
+            } else {
+                app.query.pop();
+                schedule_debounced_search(app, tx);
+            }
         }
-        KeyCode::Esc | KeyCode::Down | KeyCode::Enter => app.focus = Focus::Main,
-        KeyCode::Tab => app.focus_next(),
-        KeyCode::BackTab => app.focus_prev(),
+        KeyCode::Enter => {
+            // submit: focus the results/list so they can be navigated right away
+            app.focus = app.content_landing();
+            app.interacting = true;
+        }
+        KeyCode::Esc => app.interacting = false,
         _ => {}
     }
 }
 
-fn handle_browse_key(app: &mut App, key: KeyEvent) {
-    // Keys shared by the sidebar and main panes.
+/// Interact: the sidebar VIEWS list. Up/down highlight, Enter selects the view.
+fn interact_sidebar(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     match key.code {
-        KeyCode::Char('q') => return try_quit(app),
-        KeyCode::Char('o') => {
-            app.options_open = true;
-            app.options_selected = 0;
-            return;
-        }
-        KeyCode::Char('/') => {
-            app.focus = Focus::Search;
-            return;
-        }
-        KeyCode::Tab => return app.focus_next(),
-        KeyCode::BackTab => return app.focus_prev(),
-        KeyCode::Left | KeyCode::Char('h') => return app.focus_left(),
-        KeyCode::Right | KeyCode::Char('l') => return app.focus_right(),
-        _ => {}
-    }
-
-    match app.focus {
-        Focus::Sidebar => match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if app.sidebar_selected == 0 {
-                    app.focus = Focus::Search;
-                } else {
-                    app.move_sidebar(-1);
-                }
+        KeyCode::Up | KeyCode::Char('k') => app.move_sidebar(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_sidebar(1),
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            app.select_sidebar_view();
+            app.interacting = false;
+            app.focus = app.content_landing();
+            if app.active_view == ActiveView::Manage {
+                spawn_stats_tasks(tx.clone()); // refresh installed + updates
             }
-            KeyCode::Down | KeyCode::Char('j') => app.move_sidebar(1),
-            // Activate the highlighted view and jump into it. Search lands in the
-            // search bar; the list views focus the center area.
-            KeyCode::Enter => {
-                app.select_sidebar_view();
-                match app.active_view {
-                    ActiveView::Search => app.focus = Focus::Search,
-                    _ => app.focus = Focus::Main,
-                }
-            }
-            _ => {}
-        },
-        Focus::Main => match app.active_view {
-            ActiveView::Search => handle_search_view_key(app, key),
-            ActiveView::Installed => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
-                KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
-                KeyCode::Enter if app.selected_installed().is_some() => request_remove(app),
-                _ => {}
-            },
-            ActiveView::Updates => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => app.move_updates(-1),
-                KeyCode::Down | KeyCode::Char('j') => app.move_updates(1),
-                KeyCode::Enter if !app.updates_list.is_empty() => request_upgrade(app),
-                _ => {}
-            },
-        },
+        }
+        KeyCode::Esc => app.interacting = false,
         _ => {}
     }
 }
 
-/// Center-area key handling for the Search view (Results list ↔ Detail table).
-fn handle_search_view_key(app: &mut App, key: KeyEvent) {
+/// Interact: the Search view's content (results list ↔ provider detail).
+fn interact_main(app: &mut App, key: KeyEvent) {
     match app.main_view {
         MainView::Results => match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if app.results_selected == 0 {
-                    app.focus = Focus::Search;
-                } else {
-                    app.move_selection(-1);
-                }
-            }
+            KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
             KeyCode::Enter if app.selected_row().is_some() => {
                 app.detail_selected = 0;
                 app.main_view = MainView::Detail;
             }
+            KeyCode::Esc => app.interacting = false,
             _ => {}
         },
         MainView::Detail => match key.code {
-            KeyCode::Esc => app.main_view = MainView::Results,
             KeyCode::Up | KeyCode::Char('k') => {
                 app.detail_selected = app.detail_selected.saturating_sub(1);
             }
@@ -620,27 +646,46 @@ fn handle_search_view_key(app: &mut App, key: KeyEvent) {
                 }
             }
             KeyCode::Enter => request_install(app),
+            KeyCode::Esc => app.main_view = MainView::Results, // back to results
             _ => {}
         },
     }
 }
 
-/// Open the confirm modal to remove the selected installed package (plain `-R`).
+/// Interact: the Manage upgrade-scope chips. h/l pick a scope, Enter runs it.
+fn interact_scope(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => app.move_upgrade_scope(-1),
+        KeyCode::Right | KeyCode::Char('l') => app.move_upgrade_scope(1),
+        KeyCode::Enter => request_upgrade(app),
+        KeyCode::Esc => app.interacting = false,
+        _ => {}
+    }
+}
+
+/// Interact: the Manage installed list. j/k move, Enter/`r` remove.
+fn interact_list(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
+        KeyCode::Enter | KeyCode::Char('r') if app.selected_installed().is_some() => {
+            request_remove(app)
+        }
+        KeyCode::Esc => app.interacting = false,
+        _ => {}
+    }
+}
+
+/// Open the confirm modal to remove the selected installed package (at the
+/// depth configured in Options).
 fn request_remove(app: &mut App) {
-    if let Some(spec) = app.remove_spec(false) {
+    if let Some(spec) = app.remove_spec() {
         app.confirm = Some(spec);
         app.confirm_note = None;
     }
 }
 
-/// Rebuild the pending Remove spec as the recursive `-Rns` form before running.
-fn promote_remove_recursive(app: &mut App) {
-    if let Some(spec) = app.remove_spec(true) {
-        app.confirm = Some(spec);
-    }
-}
-
-/// Open the confirm modal for the "upgrade everything" action.
+/// Open the confirm modal for the selected upgrade scope (All or one source).
 fn request_upgrade(app: &mut App) {
     app.confirm = Some(app.upgrade_spec());
     app.confirm_note = None;

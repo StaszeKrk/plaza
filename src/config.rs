@@ -1,3 +1,4 @@
+use crate::model::RemoveDepth;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -13,6 +14,8 @@ pub struct Settings {
     /// Debounce before a search fires, in ms. Raise above your terminal's
     /// key-repeat delay so holding a key doesn't flash intermediate results.
     pub debounce_ms: u64,
+    /// How aggressively `Remove` cleans up (`-R` / `-Rs` / `-Rns`).
+    pub remove_depth: RemoveDepth,
 }
 
 impl Default for Settings {
@@ -21,6 +24,7 @@ impl Default for Settings {
             show_hotkeys: true,
             collapse_repos: false,
             debounce_ms: 400,
+            remove_depth: RemoveDepth::WithDeps,
         }
     }
 }

@@ -6,11 +6,18 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Sidebar;
-    let border = if focused { Color::Cyan } else { Color::DarkGray };
+    let active = app.is_active(Focus::Sidebar);
+    let focused = active; // show the ▸ cursor only while interacting
+    let border = if active {
+        Color::Cyan
+    } else if app.is_hovered(Focus::Sidebar) {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
 
     let upd = |o: Option<usize>| o.map(|n| n.to_string()).unwrap_or_else(|| "—".into());
-    let views = ["Search", "Installed", "Updates"];
+    let views = ["Search", "Manage"];
 
     let mut lines = vec![
         Line::from(span_bold("INSTALLED")),

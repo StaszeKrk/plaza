@@ -1,31 +1,47 @@
 use crate::action::runner::TaskState;
 use crate::app::{ActiveView, App, Focus, MainView, SourceState};
+use crate::model::SourceId;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
-    let mut parts: Vec<String> = Vec::new();
+    let pal = &app.palette;
+    let mut spans: Vec<Span> = vec![Span::raw(" ")];
 
     for (id, state) in &app.source_status {
-        let s = match state {
-            SourceState::Loading => "…".to_string(),
-            SourceState::Done(n) => n.to_string(),
-            SourceState::Error => "err".to_string(),
+        let (txt, col) = match state {
+            SourceState::Loading => ("…".to_string(), pal.muted),
+            SourceState::Done(n) => (n.to_string(), pal.fg),
+            SourceState::Error => ("err".to_string(), pal.danger),
         };
-        parts.push(format!("{} {}", id.badge(), s));
+        let badge_col = match *id {
+            SourceId::Pacman => pal.badge_repo,
+            SourceId::Aur => pal.badge_aur,
+        };
+        spans.push(Span::styled(format!("{} ", id.badge()), Style::default().fg(badge_col)));
+        spans.push(Span::styled(format!("{txt}   "), Style::default().fg(col)));
     }
 
     if let Some(task) = &app.task {
         let verb = task.spec.action.verb();
         let what = task.spec.targets.join(",");
-        let indicator = match task.state {
-            TaskState::Running => format!("◐ {what} {verb}ing… `=view"),
-            TaskState::Done { success: true, .. } => format!("✓ {what} done"),
-            TaskState::Done { success: false, code } => format!("✗ {what} failed ({code})"),
+        let (txt, col) = match task.state {
+            TaskState::Running => (
+                format!("{} {what} {verb}ing… `=view", crate::ui::ic_running(app)),
+                pal.warning,
+            ),
+            TaskState::Done { success: true, .. } => {
+                (format!("{} {what} done", crate::ui::ic_success(app)), pal.success)
+            }
+            TaskState::Done { success: false, code } => (
+                format!("{} {what} failed ({code})", crate::ui::ic_fail(app)),
+                pal.danger,
+            ),
         };
-        parts.push(indicator);
+        spans.push(Span::styled(format!("{txt}   "), Style::default().fg(col)));
     }
 
     if app.settings.show_hotkeys {
@@ -47,12 +63,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 Focus::TaskPane => "task pane · `=collapse",
             }
         };
-        parts.push(keys.to_string());
+        spans.push(Span::styled(keys.to_string(), Style::default().fg(pal.muted)));
     }
 
-    let line = format!(" {} ", parts.join("   "));
-    frame.render_widget(
-        Paragraph::new(line).style(Style::default().fg(Color::DarkGray)),
-        area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

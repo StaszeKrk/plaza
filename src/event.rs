@@ -24,4 +24,6 @@ pub enum AppEvent {
     UpdatesList(Vec<UpdateEntry>),
     PtyOutput { id: u64, bytes: Vec<u8> },
     ActionFinished { id: u64, success: bool, code: u32 },
+    /// Metronome tick driving theme-file live-reload (see `poll_theme_reload`).
+    ThemeReloadTick,
 }

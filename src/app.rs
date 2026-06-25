@@ -7,6 +7,8 @@ use crate::model::{
 use crate::search::aggregator::{merge, relevance_sort};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
 use crate::sources::updates::UpdateEntry;
+use crate::theme::{self, palette::Palette, skin::Skin};
+use std::time::SystemTime;
 
 /// A focusable panel. In the Search view the content panel is `Main`; in the
 /// Manage view it splits into `Scope` (upgrade chips) and `List` (installed).
@@ -139,9 +141,22 @@ pub struct App {
     pub task_view: TaskView,
     pub task_seq: u64,
     pub settings: Settings,
+    /// Active resolved theme: colors (`palette`) and shape (`skin`), the
+    /// registries the Options rows cycle, and the mtimes the reload poll watches.
+    pub palettes: Vec<(String, Palette)>,
+    pub skins: Vec<(String, Skin)>,
+    pub palette: Palette,
+    pub skin: Skin,
+    palette_mtime: Option<SystemTime>,
+    skin_mtime: Option<SystemTime>,
     pub options_open: bool,
     pub options_selected: usize,
     pub should_quit: bool,
+}
+
+fn file_mtime_opt(path: Option<std::path::PathBuf>) -> Option<SystemTime> {
+    let p = path?;
+    std::fs::metadata(p).ok()?.modified().ok()
 }
 
 impl App {
@@ -150,6 +165,16 @@ impl App {
             .into_iter()
             .map(|id| (id, SourceState::Done(0)))
             .collect();
+        let settings = Settings::load();
+        let base = crate::config::config_base();
+        let pal_dir = base.as_ref().map(|b| b.join("plaza").join("palettes"));
+        let skn_dir = base.as_ref().map(|b| b.join("plaza").join("skins"));
+        let (palettes, _) = theme::palette_registry(pal_dir.as_deref());
+        let (skins, _) = theme::skin_registry(skn_dir.as_deref());
+        let palette = theme::resolve_palette(&palettes, &settings.palette);
+        let skin = theme::resolve_skin(&skins, &settings.skin);
+        let palette_mtime = file_mtime_opt(theme::user_palette_path(&settings.palette));
+        let skin_mtime = file_mtime_opt(theme::user_skin_path(&settings.skin));
         App {
             query: String::new(),
             query_id: 0,
@@ -178,7 +203,13 @@ impl App {
             task: None,
             task_view: TaskView::Hidden,
             task_seq: 0,
-            settings: Settings::load(),
+            settings,
+            palettes,
+            skins,
+            palette,
+            skin,
+            palette_mtime,
+            skin_mtime,
             options_open: false,
             options_selected: 0,
             should_quit: false,
@@ -220,7 +251,7 @@ impl App {
     // --- Options overlay ---
 
     /// Number of option rows.
-    pub const OPTIONS_COUNT: usize = 4;
+    pub const OPTIONS_COUNT: usize = 6;
 
     pub fn move_options(&mut self, delta: i32) {
         let max = Self::OPTIONS_COUNT as i32 - 1;
@@ -232,11 +263,64 @@ impl App {
         match self.options_selected {
             0 => self.settings.show_hotkeys = !self.settings.show_hotkeys,
             1 => self.settings.collapse_repos = !self.settings.collapse_repos,
-            2 => self.settings.debounce_ms = next_debounce(self.settings.debounce_ms),
-            3 => self.settings.remove_depth = self.settings.remove_depth.next(),
+            2 => self.cycle_palette(),
+            3 => self.cycle_skin(),
+            4 => self.settings.debounce_ms = next_debounce(self.settings.debounce_ms),
+            5 => self.settings.remove_depth = self.settings.remove_depth.next(),
             _ => {}
         }
         self.settings.save();
+    }
+
+    /// Advance to the next palette in the registry, persisting and re-resolving.
+    pub fn cycle_palette(&mut self) {
+        let ns = theme::names(&self.palettes);
+        self.settings.palette = theme::next_name(&ns, &self.settings.palette);
+        self.palette = theme::resolve_palette(&self.palettes, &self.settings.palette);
+        self.palette_mtime = None; // re-stat the new selection on the next poll
+    }
+
+    /// Advance to the next skin in the registry, persisting and re-resolving.
+    pub fn cycle_skin(&mut self) {
+        let ns = theme::names(&self.skins);
+        self.settings.skin = theme::next_name(&ns, &self.settings.skin);
+        self.skin = theme::resolve_skin(&self.skins, &self.settings.skin);
+        self.skin_mtime = None;
+    }
+
+    /// Reload the active palette/skin if its user file changed on disk. Returns
+    /// whether anything changed (so the caller can skip redundant redraws).
+    pub fn poll_theme_reload(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(path) = theme::user_palette_path(&self.settings.palette) {
+            let m = std::fs::metadata(&path).ok().and_then(|md| md.modified().ok());
+            if m.is_some() && m != self.palette_mtime {
+                if let Some(p) = theme::load_palette_file(&path) {
+                    self.palette = p;
+                    changed = true;
+                }
+                self.palette_mtime = m;
+            }
+        }
+        if let Some(path) = theme::user_skin_path(&self.settings.skin) {
+            let m = std::fs::metadata(&path).ok().and_then(|md| md.modified().ok());
+            if m.is_some() && m != self.skin_mtime {
+                if let Some(s) = theme::load_skin_file(&path) {
+                    self.skin = s;
+                    changed = true;
+                }
+                self.skin_mtime = m;
+            }
+        }
+        changed
+    }
+
+    /// The welcome-screen footer advertising the active theme + customize path.
+    pub fn theme_footer(&self) -> String {
+        format!(
+            "palette: {} · skin: {} · edit ~/.config/plaza/",
+            self.settings.palette, self.settings.skin
+        )
     }
 
     /// Is the task pane currently on screen (peek or expanded)?
@@ -595,6 +679,31 @@ mod tests {
             assert_eq!(ActiveView::from_index(v.index()), v);
         }
         assert_eq!(ActiveView::from_index(99), ActiveView::Search);
+    }
+
+    #[test]
+    fn options_count_is_six() {
+        assert_eq!(App::OPTIONS_COUNT, 6);
+    }
+
+    #[test]
+    fn cycling_palette_changes_selection() {
+        let mut app = App::new(vec![]);
+        let before = app.settings.palette.clone();
+        app.cycle_palette();
+        assert_ne!(app.settings.palette, before);
+        assert_eq!(
+            app.palette,
+            theme::resolve_palette(&app.palettes, &app.settings.palette)
+        );
+    }
+
+    #[test]
+    fn cycling_skin_changes_selection() {
+        let mut app = App::new(vec![]);
+        let before = app.settings.skin.clone();
+        app.cycle_skin();
+        assert_ne!(app.settings.skin, before);
     }
 
     #[test]

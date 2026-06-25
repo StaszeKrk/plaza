@@ -1,0 +1,12 @@
+# plain: maximum portability for terminals without a Nerd Font. Light square
+# borders, reversed-video highlight, bracket badges, icons off (plain unicode).
+# Copy to ~/.config/plaza/skins/ and tweak.
+highlight = "reversed"
+badge     = "brackets"
+
+[border]
+thickness = 1   # light
+radius    = 0   # square
+
+[icons]
+enabled = false

@@ -1,0 +1,22 @@
+# ansi: uses the terminal's own 16-color palette, so it tracks whatever theme
+# the terminal is set to (good for a dynamically-themed setup). bg/fg are left
+# to the terminal. Copy to ~/.config/plaza/palettes/ and tweak any field.
+bg             = "none"
+fg             = "reset"
+muted          = "darkgray"
+accent         = "cyan"
+title          = "cyan"
+section        = "gray"
+border_idle    = "darkgray"
+border_hover   = "yellow"
+border_active  = "cyan"
+highlight_fg   = "black"
+highlight_bg   = "cyan"
+badge_repo     = "blue"
+badge_aur      = "magenta"
+badge_official = "cyan"
+installed      = "green"
+update         = "yellow"
+success        = "green"
+warning        = "yellow"
+danger         = "red"

@@ -1,24 +1,21 @@
 use crate::app::{App, Focus};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let active = app.is_active(Focus::Search);
-    let border = if active {
-        Color::Cyan
-    } else if app.is_hovered(Focus::Search) {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-    let cursor = if active { "▏" } else { "" };
-    let p = Paragraph::new(format!("/ {}{}", app.search_text(), cursor)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border))
-            .title(" Plaza "),
-    );
+    let border = crate::ui::border_color(app, Focus::Search);
+    let pal = &app.palette;
+    let prompt = crate::ui::ic_search(app);
+    let cursor = if active { "\u{258f}" } else { "" }; // ▏
+    let line = Line::from(vec![
+        Span::styled(format!("{prompt} "), Style::default().fg(pal.accent)),
+        Span::styled(app.search_text().to_string(), Style::default().fg(pal.fg)),
+        Span::styled(cursor.to_string(), Style::default().fg(pal.accent)),
+    ]);
+    let p = Paragraph::new(line).block(crate::ui::themed_block(app, border, " Plaza "));
     frame.render_widget(p, area);
 }

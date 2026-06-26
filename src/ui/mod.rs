@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
 pub mod detail;
+pub mod filter;
 pub mod main_view;
 pub mod search_bar;
 pub mod sidebar;
@@ -49,7 +50,7 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
             .split(area)
     };
 
-    sidebar::draw(frame, app, body[0]);
+    draw_sidebar_column(frame, app, body[0]);
     main_view::draw(frame, app, body[1]);
     if show_peek {
         task_pane::draw_peek(frame, app, body[2]);
@@ -64,6 +65,24 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
     if app.options_open {
         draw_options(frame, app, area);
     }
+}
+
+/// The left column: the stats/views box, plus the repo-filter box below it when
+/// it is open or a filter is active. The top box is a fixed height (its content
+/// does not vary); the filter box takes the rest.
+fn draw_sidebar_column(frame: &mut Frame, app: &App, area: Rect) {
+    if !app.filter_box_visible() {
+        sidebar::draw(frame, app, area);
+        return;
+    }
+    // ponytail: sidebar content is a static 14 lines (incl. borders); compute it
+    // if the top box ever gains dynamic rows.
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(14), Constraint::Min(0)])
+        .split(area);
+    sidebar::draw(frame, app, chunks[0]);
+    filter::draw(frame, app, chunks[1]);
 }
 
 // --- shared themed helpers ---------------------------------------------------

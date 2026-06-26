@@ -37,6 +37,10 @@ Manage:
 
 General:
 
+- Filters either list by repository. Press `f` for a checkbox box in the sidebar
+  to show only the repos you pick (toggle one repo, all pacman repos at once, or
+  the AUR). It follows the collapse-repos option and stays on screen while a
+  filter is active. The selection resets each launch.
 - Actions run in a background pane backed by a real terminal, so sudo prompts and
   AUR build questions work normally. A hotkey returns you to it.
 - Confirming an action adds it to a queue. The queue runs one task at a time,
@@ -103,6 +107,7 @@ Plaza has two modes, like a tiling layout you tab around:
 | Esc | step out of the focused panel |
 | Tab | switch between the Search and Manage views |
 | / | jump to the search bar from anywhere |
+| f | open or close the repository filter; Space toggles a checkbox |
 | Enter (on a result) | open it, then Enter on a source to install |
 | r, Enter (in Manage list) | remove the selected package |
 | u (in Manage list) | upgrade the selected package, if it has an update |

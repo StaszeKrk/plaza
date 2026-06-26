@@ -5,7 +5,7 @@ use crate::model::{
     ActionSpec, InstalledStats, PackageDetail, PackageHit, PackageRow, Provider, SourceId,
     UpdatesInfo,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use crate::search::aggregator::{merge, rank, relevance_sort};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
 use crate::sources::updates::UpdateEntry;
@@ -21,7 +21,26 @@ pub enum Focus {
     Main,
     Scope,
     List,
+    Filter,
     TaskPane,
+}
+
+/// One row in the repo-filter box: a checkbox plus what toggling it acts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilterId {
+    /// The pacman master: toggles every pacman repo at once (aur untouched).
+    Master,
+    /// A single concrete repo (e.g. "extra").
+    Repo(String),
+    /// The AUR.
+    Aur,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilterRow {
+    pub label: String,
+    pub checked: bool,
+    pub id: FilterId,
 }
 
 /// Hover-movement direction (navigate mode).
@@ -132,6 +151,16 @@ pub struct App {
     /// Manage-view filter text. Kept separate from `query` so each tab keeps its
     /// own search box contents.
     pub manage_filter: String,
+    /// Repo filter (the `f` box). `repo_filter_off` is the set of *unchecked*
+    /// repo identifiers (concrete repo names plus "aur"); empty means show all.
+    /// Session-only, not persisted. `filter_repos` is the stable, ordered list of
+    /// pacman repos (from `pacman -Sl`) that populate the checkbox rows.
+    pub repo_filter_off: BTreeSet<String>,
+    pub filter_repos: Vec<String>,
+    pub filter_selected: usize,
+    /// Whether the filter box is open for editing. It also stays on screen while
+    /// a filter is active (see `filter_box_visible`).
+    pub filter_open: bool,
     /// Upgradable packages (repos + AUR); drives the scope chips and `↑` markers.
     pub updates_list: Vec<UpdateEntry>,
     /// Selected upgrade-scope chip: 0 = All, 1..=n = the nth present source.
@@ -224,6 +253,10 @@ impl App {
             installed_list: Vec::new(),
             installed_selected: 0,
             manage_filter: String::new(),
+            repo_filter_off: BTreeSet::new(),
+            filter_repos: Vec::new(),
+            filter_selected: 0,
+            filter_open: false,
             updates_list: Vec::new(),
             upgrade_scope_selected: 0,
             interacting: true,
@@ -429,6 +462,10 @@ impl App {
 
             (Focus::Sidebar, Dir::Up) => Focus::Search,
             (Focus::Sidebar, Dir::Right) => top,
+            (Focus::Sidebar, Dir::Down) if self.filter_box_visible() => Focus::Filter,
+
+            (Focus::Filter, Dir::Up) => Focus::Sidebar,
+            (Focus::Filter, Dir::Right) => top,
 
             (Focus::Main, Dir::Up) => Focus::Search,
             (Focus::Main, Dir::Left) => Focus::Sidebar,
@@ -496,8 +533,9 @@ impl App {
         self.hits_buffer.extend(hits);
         self.rows = merge(self.hits_buffer.clone(), &self.installed);
         relevance_sort(&self.query, &mut self.rows);
-        if self.results_selected >= self.rows.len() {
-            self.results_selected = self.rows.len().saturating_sub(1);
+        let visible = self.search_rows().len();
+        if self.results_selected >= visible {
+            self.results_selected = visible.saturating_sub(1);
         }
         self.set_source_state(source_id, SourceState::Done(count));
     }
@@ -516,7 +554,7 @@ impl App {
     }
 
     pub fn selected_row(&self) -> Option<&PackageRow> {
-        self.rows.get(self.results_selected)
+        self.search_rows().get(self.results_selected).copied()
     }
 
     // --- sidebar VIEWS ---
@@ -580,12 +618,21 @@ impl App {
             .installed_list
             .iter()
             .filter(|p| q.is_empty() || p.name.to_ascii_lowercase().contains(&q))
+            .filter(|p| self.repo_shown(&p.origin))
             .collect();
         rows.sort_by(|a, b| {
             let (au, bu) = (updates.contains(a.name.as_str()), updates.contains(b.name.as_str()));
             bu.cmp(&au)
                 .then_with(|| rank(&q, &a.name).cmp(&rank(&q, &b.name)))
-                .then_with(|| a.name.len().cmp(&b.name.len()))
+                // Shorter-name-first only helps when ranking a real query; with an
+                // empty filter every name ranks equal, so go straight to alphabetical.
+                .then_with(|| {
+                    if q.is_empty() {
+                        std::cmp::Ordering::Equal
+                    } else {
+                        a.name.len().cmp(&b.name.len())
+                    }
+                })
                 .then_with(|| a.name.cmp(&b.name))
         });
         rows
@@ -605,6 +652,138 @@ impl App {
     pub fn clamp_installed(&mut self) {
         let n = self.manage_rows().len();
         self.installed_selected = self.installed_selected.min(n.saturating_sub(1));
+    }
+
+    // --- repo filter (the `f` box) ---
+
+    /// Whether packages from `repo` (a concrete repo name or "aur") are shown.
+    pub fn repo_shown(&self, repo: &str) -> bool {
+        !self.repo_filter_off.contains(repo)
+    }
+
+    /// The box is on screen when open for editing, or kept up because a filter is
+    /// active (so it doubles as the "filter active" indicator).
+    pub fn filter_box_visible(&self) -> bool {
+        self.filter_open || !self.repo_filter_off.is_empty()
+    }
+
+    /// True when no pacman repo is filtered out (drives the master checkbox).
+    pub fn pacman_master_checked(&self) -> bool {
+        self.filter_repos.iter().all(|r| self.repo_shown(r))
+    }
+
+    /// The checkbox rows to render, honoring `collapse_repos`. Collapsed: a single
+    /// `repo` master plus `aur`. Expanded: an `all repos` master, each repo, then
+    /// `aur`. The `aur` row appears only when the AUR source is present.
+    pub fn filter_checkboxes(&self) -> Vec<FilterRow> {
+        let mut rows = Vec::new();
+        if self.settings.collapse_repos {
+            rows.push(FilterRow {
+                label: "repo".into(),
+                checked: self.pacman_master_checked(),
+                id: FilterId::Master,
+            });
+        } else {
+            rows.push(FilterRow {
+                label: "all repos".into(),
+                checked: self.pacman_master_checked(),
+                id: FilterId::Master,
+            });
+            for r in &self.filter_repos {
+                rows.push(FilterRow {
+                    label: r.clone(),
+                    checked: self.repo_shown(r),
+                    id: FilterId::Repo(r.clone()),
+                });
+            }
+        }
+        if self.present_sources().contains(&SourceId::Aur) {
+            rows.push(FilterRow {
+                label: "aur".into(),
+                checked: self.repo_shown("aur"),
+                id: FilterId::Aur,
+            });
+        }
+        rows
+    }
+
+    /// Flip one identifier in/out of the unchecked set.
+    fn toggle_repo_off(&mut self, id: &str) {
+        if !self.repo_filter_off.remove(id) {
+            self.repo_filter_off.insert(id.to_string());
+        }
+    }
+
+    /// Toggle the highlighted checkbox. The master flips every pacman repo
+    /// together; a repo or `aur` row flips just itself. Re-clamps both list
+    /// selections, since the visible rows may shrink.
+    pub fn toggle_filter(&mut self) {
+        let Some(row) = self.filter_checkboxes().get(self.filter_selected).cloned() else {
+            return;
+        };
+        match row.id {
+            FilterId::Master => {
+                let repos = self.filter_repos.clone();
+                if self.pacman_master_checked() {
+                    self.repo_filter_off.extend(repos);
+                } else {
+                    for r in &repos {
+                        self.repo_filter_off.remove(r);
+                    }
+                }
+            }
+            FilterId::Repo(r) => self.toggle_repo_off(&r),
+            FilterId::Aur => self.toggle_repo_off("aur"),
+        }
+        self.clamp_after_filter();
+    }
+
+    /// Move the filter-box cursor, clamped to the rendered rows.
+    pub fn move_filter(&mut self, delta: i32) {
+        self.filter_selected = clamp_index(self.filter_selected, delta, self.filter_checkboxes().len());
+    }
+
+    /// Open the filter box and focus it (the `f` key).
+    pub fn open_filter(&mut self) {
+        self.filter_open = true;
+        self.focus = Focus::Filter;
+        self.interacting = true;
+        self.filter_selected = self.filter_selected.min(self.filter_checkboxes().len().saturating_sub(1));
+    }
+
+    /// Close the filter box. It stays rendered if a filter is active, but loses
+    /// focus back to the content area.
+    pub fn close_filter(&mut self) {
+        self.filter_open = false;
+        if self.focus == Focus::Filter {
+            self.focus = self.content_landing();
+            self.interacting = false;
+        }
+    }
+
+    /// `f`: toggle the box open/closed.
+    pub fn toggle_filter_open(&mut self) {
+        if self.filter_open {
+            self.close_filter();
+        } else {
+            self.open_filter();
+        }
+    }
+
+    /// Keep both list selections inside their (possibly shrunken) filtered ranges.
+    fn clamp_after_filter(&mut self) {
+        let n = self.search_rows().len();
+        self.results_selected = self.results_selected.min(n.saturating_sub(1));
+        self.clamp_installed();
+    }
+
+    /// The search results after applying the repo filter. A row is kept when at
+    /// least one of its providers' repos is shown.
+    pub fn search_rows(&self) -> Vec<&PackageRow> {
+        self.rows
+            .iter()
+            .filter(|row| row.providers.iter().any(|p| self.repo_shown(p.badge())))
+            .collect()
     }
 
     /// Build a Remove spec for the selected installed package (using the
@@ -793,15 +972,9 @@ impl App {
         }
     }
 
-    /// Move the results selection by delta, clamped to [0, len-1].
+    /// Move the results selection by delta, clamped to the filtered rows.
     pub fn move_selection(&mut self, delta: i32) {
-        if self.rows.is_empty() {
-            self.results_selected = 0;
-            return;
-        }
-        let max = self.rows.len() as i32 - 1;
-        let next = (self.results_selected as i32 + delta).clamp(0, max);
-        self.results_selected = next as usize;
+        self.results_selected = clamp_index(self.results_selected, delta, self.search_rows().len());
     }
 }
 
@@ -1156,6 +1329,136 @@ mod tests {
         // A package with no pending update yields nothing.
         app.installed_selected = 1; // zoxide
         assert!(app.upgrade_one_spec().is_none());
+    }
+
+    fn prov(source: SourceId, repo: &str) -> Provider {
+        Provider {
+            source_id: source,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            meta: SourceMeta {
+                repo: (source == SourceId::Pacman).then(|| repo.to_string()),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn row_with(name: &str, providers: Vec<Provider>) -> PackageRow {
+        PackageRow { name: name.into(), providers, best_description: String::new() }
+    }
+
+    fn app_with_repos() -> App {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        app.filter_repos = vec!["extra".into(), "world".into(), "multilib".into()];
+        app
+    }
+
+    #[test]
+    fn repo_shown_reflects_off_set() {
+        let mut app = app_with_repos();
+        assert!(app.repo_shown("extra"));
+        app.repo_filter_off.insert("extra".into());
+        assert!(!app.repo_shown("extra"));
+        assert!(app.repo_shown("world"));
+    }
+
+    #[test]
+    fn toggle_master_fills_and_clears_pacman_repos_only() {
+        let mut app = app_with_repos();
+        app.repo_filter_off.insert("aur".into()); // aur off, must stay untouched
+        // master is row 0; checked initially (no repo off)
+        assert!(app.pacman_master_checked());
+        app.filter_selected = 0;
+        app.toggle_filter(); // uncheck master -> all pacman repos off
+        assert!(!app.repo_shown("extra"));
+        assert!(!app.repo_shown("world"));
+        assert!(!app.repo_shown("multilib"));
+        assert!(!app.repo_shown("aur")); // unchanged
+        assert!(!app.pacman_master_checked());
+        app.toggle_filter(); // re-check master -> all pacman repos back on
+        assert!(app.repo_shown("extra"));
+        assert!(app.pacman_master_checked());
+        assert!(!app.repo_shown("aur")); // still off
+    }
+
+    #[test]
+    fn toggle_single_repo_and_aur() {
+        let mut app = app_with_repos();
+        // rows: [all repos, extra, world, multilib, aur]
+        app.filter_selected = 1; // extra
+        app.toggle_filter();
+        assert!(!app.repo_shown("extra"));
+        assert!(!app.pacman_master_checked()); // one repo off
+        app.filter_selected = 4; // aur
+        app.toggle_filter();
+        assert!(!app.repo_shown("aur"));
+    }
+
+    #[test]
+    fn filter_checkboxes_expanded_and_collapsed() {
+        let mut app = app_with_repos();
+        let labels: Vec<String> =
+            app.filter_checkboxes().into_iter().map(|r| r.label).collect();
+        assert_eq!(labels, vec!["all repos", "extra", "world", "multilib", "aur"]);
+        app.settings.collapse_repos = true;
+        let labels: Vec<String> =
+            app.filter_checkboxes().into_iter().map(|r| r.label).collect();
+        assert_eq!(labels, vec!["repo", "aur"]);
+    }
+
+    #[test]
+    fn search_rows_filters_by_shown_repos() {
+        let mut app = app_with_repos();
+        app.rows = vec![
+            row_with("a", vec![prov(SourceId::Pacman, "extra")]),
+            row_with("b", vec![prov(SourceId::Pacman, "multilib")]),
+            // multi-provider: shown while any provider's repo is shown
+            row_with("c", vec![prov(SourceId::Pacman, "multilib"), prov(SourceId::Aur, "")]),
+        ];
+        app.repo_filter_off.insert("multilib".into());
+        let names: Vec<&str> = app.search_rows().iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "c"]); // b dropped; c kept via its aur provider
+        app.repo_filter_off.insert("aur".into());
+        let names: Vec<&str> = app.search_rows().iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a"]); // now c's providers are all off
+    }
+
+    #[test]
+    fn manage_rows_drops_filtered_origins() {
+        let mut app = app_with_repos();
+        app.installed_list = vec![
+            InstalledPkg { name: "a".into(), version: "1".into(), origin: "extra".into() },
+            InstalledPkg { name: "b".into(), version: "1".into(), origin: "aur".into() },
+        ];
+        app.repo_filter_off.insert("aur".into());
+        let names: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["a"]);
+    }
+
+    #[test]
+    fn toggling_filter_clamps_results_selection() {
+        let mut app = app_with_repos();
+        app.rows = vec![
+            row_with("a", vec![prov(SourceId::Pacman, "extra")]),
+            row_with("b", vec![prov(SourceId::Pacman, "multilib")]),
+        ];
+        app.results_selected = 1; // on "b"
+        app.filter_selected = 3; // multilib
+        app.toggle_filter(); // hides "b"
+        assert_eq!(app.search_rows().len(), 1);
+        assert_eq!(app.results_selected, 0); // clamped
+    }
+
+    #[test]
+    fn filter_box_visible_when_open_or_active() {
+        let mut app = app_with_repos();
+        assert!(!app.filter_box_visible());
+        app.filter_open = true;
+        assert!(app.filter_box_visible());
+        app.filter_open = false;
+        app.repo_filter_off.insert("extra".into());
+        assert!(app.filter_box_visible()); // active filter keeps it up
     }
 
     #[test]

@@ -18,8 +18,9 @@ pub enum AppEvent {
     Stats(InstalledStats),
     Updates(UpdatesInfo),
     Installed(InstalledIndex),
-    /// Explicitly-installed package list (`pacman -Qe`) for the Installed view.
-    InstalledList(Vec<InstalledPkg>),
+    /// Installed package list for the Manage view, plus the distinct repo names
+    /// (priority order) from `pacman -Sl` that drive the repo filter.
+    InstalledList(Vec<InstalledPkg>, Vec<String>),
     /// Upgradable package list (repos + AUR) for the Updates view.
     UpdatesList(Vec<UpdateEntry>),
     /// Extended detail for one provider, fetched lazily on opening the detail

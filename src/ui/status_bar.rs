@@ -60,7 +60,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         let manage = app.active_view == ActiveView::Manage;
         let keys = if !app.interacting {
             // navigate mode: moving the hovered panel
-            "navigate · ↑↓←→ move · ⏎ focus · / search · ⇥ view · o opts · q quit"
+            "navigate · ↑↓←→ move · ⏎ focus · / search · f filter · ⇥ view · o opts · q quit"
         } else {
             match app.focus {
                 Focus::Search if manage => "filter · type · ⏎ list · esc back",
@@ -72,6 +72,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 },
                 Focus::Scope => "h/l scope · ⏎ upgrade · esc back",
                 Focus::List => "↑↓ move · ⏎/r remove · u upgrade · esc back",
+                Focus::Filter => "↑↓ move · space toggle · f/esc close",
                 Focus::TaskPane => "task pane · `=collapse",
             }
         };

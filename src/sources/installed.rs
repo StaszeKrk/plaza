@@ -56,6 +56,20 @@ pub fn parse_sync_repos(sl_output: &str) -> HashMap<String, String> {
     map
 }
 
+/// Distinct repo names from `pacman -Sl` output, in first-seen (priority) order.
+/// Drives the repo-filter checkbox list.
+pub fn ordered_repos(sl_output: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in sl_output.lines() {
+        if let Some(repo) = line.split_whitespace().next() {
+            if !out.iter().any(|r| r == repo) {
+                out.push(repo.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Build the full installed list from `pacman -Qn` (native) and `-Qm` (foreign),
 /// labelling each native package with its repo (via `repos`) and each foreign
 /// package as "aur". Sorted by name.
@@ -114,6 +128,13 @@ mod tests {
         // first occurrence (priority order) wins
         assert_eq!(repos.get("firefox").map(String::as_str), Some("extra"));
         assert_eq!(repos.get("neovim").map(String::as_str), Some("extra"));
+    }
+
+    #[test]
+    fn ordered_repos_distinct_in_priority_order() {
+        let sl = "extra firefox 1\nworld firefox 1\nextra neovim 1\nmultilib lib32-foo 1\n";
+        assert_eq!(ordered_repos(sl), vec!["extra", "world", "multilib"]);
+        assert!(ordered_repos("").is_empty());
     }
 
     #[test]

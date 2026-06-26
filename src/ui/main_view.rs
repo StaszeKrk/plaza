@@ -116,8 +116,8 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
     let pkg_icon = crate::ui::ic_package(app);
     let cursor = crate::ui::cursor_symbol(app);
 
-    let items: Vec<ListItem> = app
-        .rows
+    let rows = app.search_rows();
+    let items: Vec<ListItem> = rows
         .iter()
         .map(|row| {
             let shown = app.effective_providers(row);
@@ -152,13 +152,13 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(crate::ui::themed_block(app, border, format!(" results ({}) ", app.rows.len())))
+        .block(crate::ui::themed_block(app, border, format!(" results ({}) ", rows.len())))
         .highlight_style(crate::ui::highlight_style(app))
         .highlight_symbol(&cursor);
 
     let mut state = ListState::default();
-    if !app.rows.is_empty() {
-        state.select(Some(app.results_selected));
+    if !rows.is_empty() {
+        state.select(Some(app.results_selected.min(rows.len() - 1)));
     }
     frame.render_stateful_widget(list, area, &mut state);
 }

@@ -187,8 +187,9 @@ fn handle_event(
         AppEvent::Stats(s) => app.stats = s,
         AppEvent::Updates(u) => app.updates = u,
         AppEvent::Installed(idx) => app.installed = idx,
-        AppEvent::InstalledList(list) => {
+        AppEvent::InstalledList(list, repos) => {
             app.installed_list = list;
+            app.filter_repos = repos;
             app.clamp_installed();
         }
         AppEvent::UpdatesList(list) => {
@@ -325,8 +326,9 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>) 
         let foreign = text(Command::new("pacman").arg("-Qm").output().await);
         let sl = text(Command::new("pacman").arg("-Sl").output().await);
         let repos = sources::installed::parse_sync_repos(&sl);
+        let ordered = sources::installed::ordered_repos(&sl);
         let list = sources::installed::parse_installed_list(&native, &foreign, &repos);
-        let _ = tx_list.send(AppEvent::InstalledList(list));
+        let _ = tx_list.send(AppEvent::InstalledList(list, ordered));
     });
 
     // best-effort update counts + list (repos and AUR)
@@ -544,6 +546,12 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
+    // `f` toggles the repo-filter box (unless typing in the search field).
+    if key.code == KeyCode::Char('f') && !(app.focus == Focus::Search && app.interacting) {
+        app.toggle_filter_open();
+        return;
+    }
+
     // Two modes: navigate (move the hovered panel) and interact (act inside the
     // focused panel). Enter/Space activates; Esc steps back out.
     if app.interacting {
@@ -578,6 +586,7 @@ fn handle_interact_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEve
         Focus::Main => interact_main(app, key, tx),
         Focus::Scope => interact_scope(app, key),
         Focus::List => interact_list(app, key),
+        Focus::Filter => interact_filter(app, key),
         Focus::TaskPane => {} // the task pane owns input via handle_task_pane_key
     }
 }
@@ -834,6 +843,18 @@ fn interact_list(app: &mut App, key: KeyEvent) {
             request_remove(app)
         }
         KeyCode::Esc => app.interacting = false,
+        _ => {}
+    }
+}
+
+/// Interact: the repo-filter box. j/k move, space/Enter toggle the checkbox,
+/// Esc steps back out (the box stays if a filter is active).
+fn interact_filter(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.move_filter(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_filter(1),
+        KeyCode::Char(' ') | KeyCode::Enter => app.toggle_filter(),
+        KeyCode::Esc => app.close_filter(),
         _ => {}
     }
 }

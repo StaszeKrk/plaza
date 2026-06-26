@@ -61,7 +61,7 @@ pub fn relevance_sort(query: &str, rows: &mut [PackageRow]) {
     });
 }
 
-fn rank(q: &str, name: &str) -> u8 {
+pub fn rank(q: &str, name: &str) -> u8 {
     let n = name.to_lowercase();
     if n == q {
         0

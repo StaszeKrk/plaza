@@ -6,7 +6,7 @@ use crate::model::{
     UpdatesInfo,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
-use crate::search::aggregator::{merge, relevance_sort};
+use crate::search::aggregator::{merge, rank, relevance_sort};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
 use crate::sources::updates::UpdateEntry;
 use crate::theme::{self, palette::Palette, skin::Skin};
@@ -583,7 +583,10 @@ impl App {
             .collect();
         rows.sort_by(|a, b| {
             let (au, bu) = (updates.contains(a.name.as_str()), updates.contains(b.name.as_str()));
-            bu.cmp(&au).then_with(|| a.name.cmp(&b.name))
+            bu.cmp(&au)
+                .then_with(|| rank(&q, &a.name).cmp(&rank(&q, &b.name)))
+                .then_with(|| a.name.len().cmp(&b.name.len()))
+                .then_with(|| a.name.cmp(&b.name))
         });
         rows
     }

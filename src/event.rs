@@ -1,4 +1,4 @@
-use crate::model::{InstalledStats, PackageHit, SourceId, UpdatesInfo};
+use crate::model::{InstalledStats, PackageDetail, PackageHit, SourceId, UpdatesInfo};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
 use crate::sources::updates::UpdateEntry;
 
@@ -22,6 +22,9 @@ pub enum AppEvent {
     InstalledList(Vec<InstalledPkg>),
     /// Upgradable package list (repos + AUR) for the Updates view.
     UpdatesList(Vec<UpdateEntry>),
+    /// Extended detail for one provider, fetched lazily on opening the detail
+    /// view. Keyed by `Provider::detail_key`.
+    PackageDetailLoaded { key: String, detail: PackageDetail },
     PtyOutput { id: u64, bytes: Vec<u8> },
     ActionFinished { id: u64, success: bool, code: u32 },
     /// Metronome tick driving theme-file live-reload (see `poll_theme_reload`).

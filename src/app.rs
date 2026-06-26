@@ -2,8 +2,9 @@ use crate::action::runner::ActiveTask;
 use crate::config::Settings;
 use crate::model::{
     chain_commands, remove_command, source_upgrade_command, Action, ActionSpec, InstalledStats,
-    PackageHit, PackageRow, Provider, SourceId, UpdatesInfo,
+    PackageDetail, PackageHit, PackageRow, Provider, SourceId, UpdatesInfo,
 };
+use std::collections::{HashMap, HashSet};
 use crate::search::aggregator::{merge, relevance_sort};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
 use crate::sources::updates::UpdateEntry;
@@ -118,6 +119,11 @@ pub struct App {
     pub main_view: MainView,
     pub results_selected: usize,
     pub detail_selected: usize,
+    /// Extended per-provider detail, fetched lazily on opening the detail view
+    /// and keyed by `Provider::detail_key`. `detail_requested` tracks in-flight
+    /// keys so a fetch is dispatched at most once per provider.
+    pub details: HashMap<String, PackageDetail>,
+    pub detail_requested: HashSet<String>,
     pub sidebar_selected: usize,
     /// All installed packages (`pacman -Qn` + `-Qm`) for the Manage view.
     pub installed_list: Vec<InstalledPkg>,
@@ -200,6 +206,8 @@ impl App {
             main_view: MainView::Results,
             results_selected: 0,
             detail_selected: 0,
+            details: HashMap::new(),
+            detail_requested: HashSet::new(),
             sidebar_selected: 0,
             installed_list: Vec::new(),
             installed_selected: 0,

@@ -51,6 +51,18 @@ impl Provider {
         }
     }
 
+    /// Cache key for this provider's fetched detail. Mirrors the install target:
+    /// `repo/name` for pacman, `aur:name` for the AUR. Unique per (source, repo).
+    pub fn detail_key(&self, name: &str) -> String {
+        match self.source_id {
+            SourceId::Pacman => match &self.meta.repo {
+                Some(repo) => format!("{repo}/{name}"),
+                None => name.to_string(),
+            },
+            SourceId::Aur => format!("aur:{name}"),
+        }
+    }
+
     /// The command that installs `name` specifically from THIS provider.
     /// Pacman targets are repo-qualified (`repo/pkg`) so a non-default repo can
     /// be chosen; the AUR goes through `aur_bin` (the resolved helper, yay/paru).
@@ -88,6 +100,27 @@ impl PackageRow {
     pub fn has_source(&self, id: SourceId) -> bool {
         self.providers.iter().any(|p| p.source_id == id)
     }
+}
+
+/// Extended per-provider package info, fetched lazily when the detail view is
+/// opened (`pacman -Si repo/pkg` for repos, the AUR `info` RPC for the AUR).
+/// Every field is optional: each source fills what it has, the UI shows what is
+/// present.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PackageDetail {
+    pub url: Option<String>,
+    /// Package's page in its repository's web frontend (archlinux.org / AUR).
+    pub repo_url: Option<String>,
+    pub licenses: Option<String>,
+    /// Human string as the source reports it (e.g. "232.50 MiB"). pacman only.
+    pub install_size: Option<String>,
+    /// pacman build date, as reported. pacman only.
+    pub build_date: Option<String>,
+    pub depends: Vec<String>,
+    /// AUR maintainer handle. AUR only.
+    pub maintainer: Option<String>,
+    /// AUR popularity score. AUR only.
+    pub popularity: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,6 +353,26 @@ mod tests {
     fn installed_stats_total() {
         let s = InstalledStats { repo: 1208, foreign: 77 };
         assert_eq!(s.total(), 1285);
+    }
+
+    #[test]
+    fn detail_key_mirrors_install_target() {
+        let pac = Provider {
+            source_id: SourceId::Pacman,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            meta: SourceMeta { repo: Some("extra".into()), ..Default::default() },
+        };
+        assert_eq!(pac.detail_key("firefox"), "extra/firefox");
+        let aur = Provider {
+            source_id: SourceId::Aur,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            meta: SourceMeta::default(),
+        };
+        assert_eq!(aur.detail_key("firefox-git"), "aur:firefox-git");
     }
 
     #[test]

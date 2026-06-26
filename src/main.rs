@@ -195,6 +195,9 @@ fn handle_event(
             app.updates_list = list;
             app.clamp_installed();
         }
+        AppEvent::PackageDetailLoaded { key, detail } => {
+            app.details.insert(key, detail);
+        }
         AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
             if let Some(task) = &mut app.task {
@@ -383,6 +386,56 @@ fn dispatch_search(
     }
 }
 
+/// Fetch extended detail for every provider of the selected row that is not
+/// already cached or in flight. Each fetch runs in its own task and streams the
+/// result back via `PackageDetailLoaded` (like search hits); stale results for a
+/// package the user navigated away from simply sit in the cache.
+fn dispatch_details(app: &mut App, tx: &UnboundedSender<AppEvent>) {
+    let Some(row) = app.selected_row() else { return };
+    let name = row.name.clone();
+    let mut to_fetch = Vec::new();
+    for p in app.effective_providers(row) {
+        let key = p.detail_key(&name);
+        if app.details.contains_key(&key) || app.detail_requested.contains(&key) {
+            continue;
+        }
+        to_fetch.push((p.source_id, p.meta.repo.clone(), key));
+    }
+    for (source_id, repo, key) in to_fetch {
+        app.detail_requested.insert(key.clone());
+        let tx = tx.clone();
+        let name = name.clone();
+        tokio::spawn(async move {
+            if let Some(detail) = fetch_detail(source_id, &name, repo.as_deref()).await {
+                let _ = tx.send(AppEvent::PackageDetailLoaded { key, detail });
+            }
+        });
+    }
+}
+
+/// Fetch one provider's detail: `pacman -Si repo/pkg` for repos, the AUR `info`
+/// RPC for the AUR. `None` on any IO/parse failure (the field just stays empty).
+async fn fetch_detail(
+    source_id: SourceId,
+    name: &str,
+    repo: Option<&str>,
+) -> Option<model::PackageDetail> {
+    match source_id {
+        SourceId::Pacman => {
+            let target = match repo {
+                Some(r) => format!("{r}/{name}"),
+                None => name.to_string(),
+            };
+            let out = Command::new("pacman").arg("-Si").arg(&target).output().await.ok()?;
+            Some(sources::pacman::parse_si_output(&String::from_utf8_lossy(&out.stdout)))
+        }
+        SourceId::Aur => {
+            let body = reqwest::get(sources::aur::info_url(name)).await.ok()?.text().await.ok()?;
+            sources::aur::parse_info_response(&body)
+        }
+    }
+}
+
 fn schedule_debounced_search(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     app.debounce_gen += 1;
     let gen = app.debounce_gen;
@@ -480,7 +533,7 @@ fn handle_interact_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEve
     match app.focus {
         Focus::Search => interact_search(app, key, tx),
         Focus::Sidebar => interact_sidebar(app, key, tx),
-        Focus::Main => interact_main(app, key),
+        Focus::Main => interact_main(app, key, tx),
         Focus::Scope => interact_scope(app, key),
         Focus::List => interact_list(app, key),
         Focus::TaskPane => {} // the task pane owns input via handle_task_pane_key
@@ -647,7 +700,7 @@ fn interact_sidebar(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>
 }
 
 /// Interact: the Search view's content (results list ↔ provider detail).
-fn interact_main(app: &mut App, key: KeyEvent) {
+fn interact_main(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     match app.main_view {
         MainView::Results => match key.code {
             KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
@@ -655,6 +708,7 @@ fn interact_main(app: &mut App, key: KeyEvent) {
             KeyCode::Enter if app.selected_row().is_some() => {
                 app.detail_selected = 0;
                 app.main_view = MainView::Detail;
+                dispatch_details(app, tx);
             }
             KeyCode::Esc => app.interacting = false,
             _ => {}

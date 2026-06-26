@@ -1,4 +1,4 @@
-use crate::model::{Action, CommandLine, PackageHit, SourceId, SourceMeta};
+use crate::model::{Action, CommandLine, PackageDetail, PackageHit, SourceId, SourceMeta};
 use crate::sources::Source;
 use async_trait::async_trait;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -42,8 +42,8 @@ impl Source for AurSource {
 }
 
 #[derive(Deserialize)]
-struct RpcResponse {
-    results: Vec<RpcResult>,
+struct RpcResponse<T> {
+    results: Vec<T>,
 }
 
 #[derive(Deserialize)]
@@ -66,7 +66,7 @@ struct RpcResult {
 
 /// Parse an AUR RPC v5 `search` response body into hits.
 pub fn parse_rpc_response(body: &str) -> anyhow::Result<Vec<PackageHit>> {
-    let resp: RpcResponse = serde_json::from_str(body)?;
+    let resp: RpcResponse<RpcResult> = serde_json::from_str(body)?;
     Ok(resp
         .results
         .into_iter()
@@ -84,6 +84,47 @@ pub fn parse_rpc_response(body: &str) -> anyhow::Result<Vec<PackageHit>> {
             },
         })
         .collect())
+}
+
+/// The AUR `info` RPC URL for a single package (full metadata: url, deps,
+/// maintainer, popularity, license).
+pub fn info_url(name: &str) -> String {
+    let encoded = utf8_percent_encode(name, NON_ALPHANUMERIC).to_string();
+    format!("https://aur.archlinux.org/rpc/v5/info?arg[]={encoded}")
+}
+
+#[derive(Deserialize)]
+struct RpcInfoResult {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "URL")]
+    url: Option<String>,
+    #[serde(rename = "Maintainer")]
+    maintainer: Option<String>,
+    #[serde(rename = "Popularity")]
+    popularity: Option<f64>,
+    #[serde(rename = "Depends")]
+    depends: Option<Vec<String>>,
+    #[serde(rename = "License")]
+    license: Option<Vec<String>>,
+}
+
+/// Parse an AUR RPC v5 `info` response body into a `PackageDetail` (first
+/// result). `None` when the package is unknown (empty results) or the body does
+/// not parse.
+pub fn parse_info_response(body: &str) -> Option<PackageDetail> {
+    let resp: RpcResponse<RpcInfoResult> = serde_json::from_str(body).ok()?;
+    let r = resp.results.into_iter().next()?;
+    Some(PackageDetail {
+        url: r.url.filter(|s| !s.is_empty()),
+        repo_url: Some(format!("https://aur.archlinux.org/packages/{}", r.name)),
+        licenses: r.license.filter(|l| !l.is_empty()).map(|l| l.join(", ")),
+        install_size: None,
+        build_date: None,
+        depends: r.depends.unwrap_or_default(),
+        maintainer: r.maintainer,
+        popularity: r.popularity,
+    })
 }
 
 #[cfg(test)]
@@ -121,5 +162,37 @@ mod tests {
     fn empty_results() {
         let body = r#"{"resultcount":0,"results":[],"type":"search","version":5}"#;
         assert!(parse_rpc_response(body).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parses_info_detail() {
+        let body = r#"{"resultcount":1,"results":[
+          {"Name":"firefox-git","URL":"https://www.mozilla.org","Maintainer":"alice",
+           "Popularity":0.41,"Depends":["gtk3","nss"],"License":["MPL-2.0","GPL"]}
+        ],"type":"multiinfo","version":5}"#;
+        let d = parse_info_response(body).unwrap();
+        assert_eq!(d.url.as_deref(), Some("https://www.mozilla.org"));
+        assert_eq!(d.maintainer.as_deref(), Some("alice"));
+        assert_eq!(d.popularity, Some(0.41));
+        assert_eq!(d.depends, vec!["gtk3", "nss"]);
+        assert_eq!(d.licenses.as_deref(), Some("MPL-2.0, GPL"));
+        assert_eq!(
+            d.repo_url.as_deref(),
+            Some("https://aur.archlinux.org/packages/firefox-git")
+        );
+    }
+
+    #[test]
+    fn info_empty_results_is_none() {
+        let body = r#"{"resultcount":0,"results":[],"type":"multiinfo","version":5}"#;
+        assert!(parse_info_response(body).is_none());
+    }
+
+    #[test]
+    fn info_url_encodes_name() {
+        assert_eq!(
+            info_url("c++"),
+            "https://aur.archlinux.org/rpc/v5/info?arg[]=c%2B%2B"
+        );
     }
 }

@@ -29,6 +29,10 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         let verb = task.spec.action.verb();
         let what = task.spec.targets.join(",");
         let (txt, col) = match task.state {
+            TaskState::Running if app.needs_input && app.focus != Focus::TaskPane => (
+                format!("{} {what} waiting for input · press ` to answer", crate::ui::ic_running(app)),
+                pal.accent,
+            ),
             TaskState::Running => (
                 format!("{} {what} {verb}ing… `=view", crate::ui::ic_running(app)),
                 pal.warning,
@@ -67,7 +71,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                     MainView::Detail => "↑↓ source · ⏎ install · esc results",
                 },
                 Focus::Scope => "h/l scope · ⏎ upgrade · esc back",
-                Focus::List => "↑↓ move · ⏎/r remove · esc back",
+                Focus::List => "↑↓ move · ⏎/r remove · u upgrade · esc back",
                 Focus::TaskPane => "task pane · `=collapse",
             }
         };

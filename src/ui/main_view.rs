@@ -88,7 +88,7 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let title = if app.manage_filter.is_empty() {
-        format!(" installed ({}) · ⏎/r remove ", rows.len())
+        format!(" installed ({}) · ⏎/r remove · u upgrade ", rows.len())
     } else {
         format!(
             " installed ({}/{}) · filter:'{}' ",

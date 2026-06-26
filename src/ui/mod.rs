@@ -226,13 +226,15 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
     }
     if busy {
         if let Some(running) = &app.task {
+            let ahead = app.queue.len() + 1; // running task + anything already queued
             lines.push(Line::from(Span::styled(
                 format!(
-                    "\u{26a0} cancels the running {} of {}",
+                    "queues behind the running {} of {} (#{} in line)",
                     running.spec.action.verb(),
-                    running.spec.targets.join(", ")
+                    running.spec.targets.join(", "),
+                    ahead + 1
                 ),
-                Style::default().fg(app.palette.danger),
+                Style::default().fg(app.palette.muted),
             )));
         }
     }

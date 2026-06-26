@@ -200,14 +200,26 @@ fn handle_event(
         }
         AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
+            let mut prompt = app.needs_input;
             if let Some(task) = &mut app.task {
                 if task.id == id {
                     task.parser.process(&bytes);
                     if !watching {
                         task.has_unseen_output = true;
                     }
+                    let last = task
+                        .parser
+                        .screen()
+                        .contents()
+                        .lines()
+                        .rev()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("")
+                        .to_string();
+                    prompt = crate::model::looks_like_prompt(&last);
                 }
             }
+            app.needs_input = prompt;
         }
         AppEvent::ActionFinished { id, success, code } => {
             let mut matched = false;
@@ -217,9 +229,20 @@ fn handle_event(
                     matched = true;
                 }
             }
-            // Refresh stats + installed index after the current action completes.
             if matched {
+                app.needs_input = false;
+                // Refresh stats + installed index after each action completes.
                 spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone());
+                if success && !app.queue.is_empty() {
+                    // Auto-advance: drop the finished task and start the next item.
+                    // Do not surface; keep the user wherever they currently are.
+                    app.task = None;
+                    start_next(app, tx, false);
+                } else if !success {
+                    // Pause the queue on failure; the user resumes or clears it.
+                    app.queue_paused = true;
+                }
+                // success + empty queue: leave the finished task on screen as today.
             }
         }
         _ => {}
@@ -235,12 +258,29 @@ fn expanded_pty_size(term_cols: u16, term_rows: u16) -> (u16, u16) {
     (rows, cols)
 }
 
-fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
+/// Confirm "y": enqueue the action. If nothing is running (and the queue is not
+/// paused on a prior failure), start draining immediately; otherwise it waits
+/// its turn behind the running/failed task.
+fn confirm_action(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     let Some(spec) = app.confirm.take() else { return };
     app.confirm_note = None;
-    // Cancel/replace any prior task: dropping it closes the PTY, so an abandoned
-    // child (e.g. one still waiting at the sudo prompt) gets a hangup and exits.
-    app.task = None;
+    app.enqueue(spec);
+    if !running_task(app) && !app.queue_paused {
+        app.task = None; // drop a lingering finished task before starting the next
+        start_next(app, tx, true);
+    } else if app.task_view == TaskView::Hidden {
+        // Surface the pane so the user can see the item is queued.
+        app.task_view = TaskView::Peek;
+    }
+}
+
+/// Pop the next pending action and spawn it in a fresh PTY task. No-op when the
+/// queue is empty. `surface` brings the pane up Expanded + focused (for a task
+/// the user just started); when false the user's current focus and view are left
+/// untouched so an auto-advance through the queue does not yank them around.
+fn start_next(app: &mut App, tx: &UnboundedSender<AppEvent>, surface: bool) {
+    let Some(spec) = app.dequeue_next() else { return };
+    app.needs_input = false;
     app.task_seq += 1;
     let id = app.task_seq;
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -248,11 +288,13 @@ fn begin_install(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     match start_action(spec, id, rows, cols, tx.clone()) {
         Ok(task) => {
             app.task = Some(task);
-            app.task_view = TaskView::Expanded;
-            app.focus = Focus::TaskPane;
+            if surface {
+                app.task_view = TaskView::Expanded;
+                app.focus = Focus::TaskPane;
+            }
         }
         Err(e) => {
-            eprintln!("plaza: failed to start install: {e}");
+            eprintln!("plaza: failed to start action: {e}");
         }
     }
 }
@@ -460,7 +502,7 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     // Confirm modal next.
     if app.confirm.is_some() {
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => begin_install(app, tx),
+            KeyCode::Char('y') | KeyCode::Char('Y') => confirm_action(app, tx),
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.clear_confirm(),
             _ => {}
         }
@@ -476,7 +518,7 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     // The focused task pane owns input — including Ctrl-C, which forwards to the
     // child as SIGINT to cancel a running install (rather than quitting Plaza).
     if app.focus == Focus::TaskPane {
-        handle_task_pane_key(app, key);
+        handle_task_pane_key(app, key, tx);
         return;
     }
 
@@ -582,15 +624,33 @@ fn toggle_task_pane(app: &mut App) {
     }
 }
 
-fn handle_task_pane_key(app: &mut App, key: KeyEvent) {
+/// Dismiss the finished task and resume the queue: if items remain, start the
+/// next; otherwise hide the pane. Clears any failure pause.
+fn dismiss_and_continue(app: &mut App, tx: &UnboundedSender<AppEvent>) {
+    app.task = None;
+    app.queue_paused = false;
+    if app.queue.is_empty() {
+        app.dismiss_task();
+    } else {
+        // The user is acting from the task pane, so keep them on the next task.
+        start_next(app, tx, true);
+    }
+}
+
+fn handle_task_pane_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     let done = task_done(app);
     match app.task_view {
         TaskView::Expanded => {
             if done {
-                // Nothing to forward; any dismiss key closes it.
+                // A finished task: Enter/Esc/q dismiss and continue the queue;
+                // x clears the remaining queue too.
                 match key.code {
-                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('x') => {
-                        app.dismiss_task()
+                    KeyCode::Char('x') => {
+                        app.clear_queue();
+                        app.dismiss_task();
+                    }
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                        dismiss_and_continue(app, tx)
                     }
                     _ => {}
                 }
@@ -608,11 +668,30 @@ fn handle_task_pane_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
+        // Peek shows the running/finished item plus the pending queue, which is
+        // navigable here (j/k select, d removes one, x clears all).
         TaskView::Peek => match key.code {
-            KeyCode::Enter => toggle_task_pane(app), // expand
-            KeyCode::Esc | KeyCode::Char('x') => {
+            KeyCode::Up | KeyCode::Char('k') => app.move_queue(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.move_queue(1),
+            KeyCode::Char('d') => app.remove_queued(app.queue_selected),
+            KeyCode::Char('x') => {
                 if done {
+                    app.clear_queue();
                     app.dismiss_task();
+                } else {
+                    app.clear_queue(); // drop pending; the running task keeps going
+                }
+            }
+            KeyCode::Enter => {
+                if done {
+                    dismiss_and_continue(app, tx);
+                } else {
+                    toggle_task_pane(app); // expand the running task
+                }
+            }
+            KeyCode::Esc => {
+                if done {
+                    dismiss_and_continue(app, tx);
                 } else {
                     app.task_view = TaskView::Hidden; // hide a running task
                     app.focus = app.content_landing();
@@ -744,17 +823,43 @@ fn interact_scope(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Interact: the Manage installed list. j/k move, Enter/`r` remove.
+/// Interact: the Manage installed list. j/k move, Enter/`r` remove, `u` upgrade
+/// the highlighted package (when it has a pending update).
 fn interact_list(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
+        KeyCode::Char('u') if app.selected_installed().is_some() => request_upgrade_one(app),
         KeyCode::Enter | KeyCode::Char('r') if app.selected_installed().is_some() => {
             request_remove(app)
         }
         KeyCode::Esc => app.interacting = false,
         _ => {}
     }
+}
+
+/// Open the confirm modal to upgrade the highlighted package on its own. Shows a
+/// message when the package has no pending update, or when an AUR upgrade needs a
+/// helper that is not installed.
+fn request_upgrade_one(app: &mut App) {
+    let Some(spec) = app.upgrade_one_spec() else {
+        app.status_msg = Some("no update available for this package".to_string());
+        return;
+    };
+    if spec.source_id == SourceId::Aur && app.aur_helper_bin.is_none() {
+        app.status_msg = Some(NO_AUR_HELPER_MSG.to_string());
+        return;
+    }
+    let fallback = app.aur_fallback_note_for(spec.source_id);
+    // Single repo upgrades are partial upgrades; surface the caveat.
+    let caveat = (spec.source_id == SourceId::Pacman).then(|| {
+        "single-package upgrade is a partial upgrade; sync your db first if it errors".to_string()
+    });
+    app.confirm_note = match (fallback, caveat) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
+    };
+    app.confirm = Some(spec);
 }
 
 /// Open the confirm modal to remove the selected installed package (at the
@@ -783,7 +888,7 @@ fn request_upgrade(app: &mut App) {
 }
 
 /// Build an ActionSpec for the selected provider and open the confirm modal.
-/// If a task is still running, the confirm will note it gets cancelled.
+/// Confirming enqueues the install behind any running task.
 fn request_install(app: &mut App) {
     let Some(row) = app.selected_row() else { return };
     let providers = app.effective_providers(row);

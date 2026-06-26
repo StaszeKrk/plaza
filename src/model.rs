@@ -254,6 +254,39 @@ pub fn next_aur_helper(current: AurHelper, yay: bool, paru: bool) -> AurHelper {
     ring[(idx + 1) % ring.len()]
 }
 
+/// Upgrade a single package. A repo package upgrades unqualified
+/// (`sudo pacman -S <name>`), so pacman picks its default repo's latest version;
+/// the AUR goes through the resolved helper (`<aur_bin> -S <name>`). This is a
+/// partial upgrade for repo packages, which Arch discourages, but it is what the
+/// per-package upgrade action requests.
+pub fn upgrade_one_command(name: &str, source_id: SourceId, aur_bin: &str) -> CommandLine {
+    match source_id {
+        SourceId::Pacman => CommandLine {
+            program: "sudo".into(),
+            args: vec!["pacman".into(), "-S".into(), name.into()],
+        },
+        SourceId::Aur => CommandLine {
+            program: aur_bin.into(),
+            args: vec!["-S".into(), name.into()],
+        },
+    }
+}
+
+/// True when a PTY line looks like a prompt that has stopped to wait for input
+/// (sudo password, pacman/AUR proceed and selection prompts). Used to flag a
+/// background task as needing attention when the user is not on the task pane.
+/// Kept tight so ordinary progress and download lines do not trip it.
+pub fn looks_like_prompt(line: &str) -> bool {
+    let l = line.trim().to_ascii_lowercase();
+    if l.is_empty() {
+        return false;
+    }
+    l.contains("[y/n")
+        || l.contains("password")
+        || (l.starts_with("::") && (l.ends_with(':') || l.ends_with('?')))
+        || (l.starts_with("==>") && l.ends_with(':'))
+}
+
 /// The full-upgrade command for a single source.
 /// - pacman: `sudo pacman -Syu` (sync + upgrade the repos)
 /// - aur:    `<aur_bin> -Sua` (upgrade AUR packages only, via the resolved helper)
@@ -345,6 +378,21 @@ pub fn days_ago(ts: i64, now: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn looks_like_prompt_matches_arch_prompts_only() {
+        // real prompts that block on input
+        assert!(looks_like_prompt("[sudo] password for staszek:"));
+        assert!(looks_like_prompt(":: Proceed with installation? [Y/n]"));
+        assert!(looks_like_prompt(":: Replace foo with bar? [y/N]"));
+        assert!(looks_like_prompt(":: Enter a number (default=1):"));
+        assert!(looks_like_prompt("==> Packages to exclude:"));
+        // ordinary output that must not trip
+        assert!(!looks_like_prompt(""));
+        assert!(!looks_like_prompt("downloading firefox-123.0-1 (90.2 MiB)"));
+        assert!(!looks_like_prompt("(5/5) checking keys in keyring"));
+        assert!(!looks_like_prompt("resolving dependencies..."));
+    }
 
     #[test]
     fn source_badges() {
@@ -444,6 +492,19 @@ mod tests {
         assert_eq!(RemoveDepth::WithDeps.next(), RemoveDepth::Purge);
         assert_eq!(RemoveDepth::Purge.next(), RemoveDepth::Package);
         assert_eq!(RemoveDepth::Package.next(), RemoveDepth::WithDeps);
+    }
+
+    #[test]
+    fn upgrade_one_command_per_source() {
+        // A single repo package upgrades unqualified (its default repo's latest),
+        // avoiding a bogus "repo/" qualifier for packages with an unknown origin.
+        let pac = upgrade_one_command("firefox", SourceId::Pacman, "yay");
+        assert_eq!(pac.program, "sudo");
+        assert_eq!(pac.args, vec!["pacman", "-S", "firefox"]);
+        // The AUR goes through the resolved helper.
+        let aur = upgrade_one_command("tty-clock", SourceId::Aur, "paru");
+        assert_eq!(aur.program, "paru");
+        assert_eq!(aur.args, vec!["-S", "tty-clock"]);
     }
 
     #[test]

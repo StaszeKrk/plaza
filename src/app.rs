@@ -1,10 +1,11 @@
 use crate::action::runner::ActiveTask;
 use crate::config::Settings;
 use crate::model::{
-    chain_commands, remove_command, source_upgrade_command, Action, ActionSpec, InstalledStats,
-    PackageDetail, PackageHit, PackageRow, Provider, SourceId, UpdatesInfo,
+    chain_commands, remove_command, source_upgrade_command, upgrade_one_command, Action,
+    ActionSpec, InstalledStats, PackageDetail, PackageHit, PackageRow, Provider, SourceId,
+    UpdatesInfo,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use crate::search::aggregator::{merge, relevance_sort};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
 use crate::sources::updates::UpdateEntry;
@@ -144,6 +145,13 @@ pub struct App {
     pub confirm: Option<ActionSpec>,
     pub confirm_note: Option<String>,
     pub task: Option<ActiveTask>,
+    /// Pending actions, drained one at a time after the running `task` finishes.
+    pub queue: VecDeque<ActionSpec>,
+    /// Set when a task finished with a failure: the queue stops draining until
+    /// the user dismisses (resume) or clears it.
+    pub queue_paused: bool,
+    /// Selected pending item in the task pane's queue list (for per-item removal).
+    pub queue_selected: usize,
     pub task_view: TaskView,
     pub task_seq: u64,
     pub settings: Settings,
@@ -167,6 +175,10 @@ pub struct App {
     /// Transient one-line status message (e.g. "no AUR helper installed"), shown
     /// in the status bar until the next keypress.
     pub status_msg: Option<String>,
+    /// True while the running task's latest output line looks like a prompt
+    /// waiting for input. Drives the status-bar alert when the user is off the
+    /// task pane. Recomputed on each chunk of PTY output.
+    pub needs_input: bool,
     pub should_quit: bool,
 }
 
@@ -219,6 +231,9 @@ impl App {
             confirm: None,
             confirm_note: None,
             task: None,
+            queue: VecDeque::new(),
+            queue_paused: false,
+            queue_selected: 0,
             task_view: TaskView::Hidden,
             task_seq: 0,
             settings,
@@ -234,6 +249,7 @@ impl App {
             aur_helper_bin: None,
             aur_helper_fell_back: false,
             status_msg: None,
+            needs_input: false,
             should_quit: false,
         }
     }
@@ -600,6 +616,59 @@ impl App {
         })
     }
 
+    // --- action queue ---
+
+    /// Append a pending action to the queue.
+    pub fn enqueue(&mut self, spec: ActionSpec) {
+        self.queue.push_back(spec);
+    }
+
+    /// Pop the next pending action (front of the queue).
+    pub fn dequeue_next(&mut self) -> Option<ActionSpec> {
+        self.queue.pop_front()
+    }
+
+    /// Drop pending item `i` (no-op if out of range), keeping the selection in range.
+    pub fn remove_queued(&mut self, i: usize) {
+        if i < self.queue.len() {
+            self.queue.remove(i);
+            self.queue_selected = self.queue_selected.min(self.queue.len().saturating_sub(1));
+        }
+    }
+
+    /// Drop all pending actions and clear the pause state.
+    pub fn clear_queue(&mut self) {
+        self.queue.clear();
+        self.queue_paused = false;
+        self.queue_selected = 0;
+    }
+
+    /// Move the queue selection by delta, clamped to the pending range.
+    pub fn move_queue(&mut self, delta: i32) {
+        self.queue_selected = clamp_index(self.queue_selected, delta, self.queue.len());
+    }
+
+    /// The source a pending update for `name` comes from, if any.
+    pub fn update_source_for(&self, name: &str) -> Option<SourceId> {
+        self.updates_list.iter().find(|u| u.name == name).map(|u| u.source_id)
+    }
+
+    /// Build an Upgrade spec for the selected installed package, but only when it
+    /// has a pending update. The repo path upgrades unqualified; the AUR path
+    /// uses the resolved helper (an empty binary when none is installed, which
+    /// the caller gates before running).
+    pub fn upgrade_one_spec(&self) -> Option<ActionSpec> {
+        let pkg = self.selected_installed()?;
+        let source = self.update_source_for(&pkg.name)?;
+        let aur_bin = self.aur_helper_bin.as_deref().unwrap_or("");
+        Some(ActionSpec {
+            targets: vec![pkg.name.clone()],
+            source_id: source,
+            action: Action::Upgrade,
+            command: upgrade_one_command(&pkg.name, source, aur_bin),
+        })
+    }
+
     // --- upgrade scope selector ---
 
     /// Present sources in detection order (the basis for the scope chips).
@@ -736,7 +805,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::SourceMeta;
+    use crate::model::{CommandLine, SourceMeta};
 
     fn hit(name: &str, source: SourceId) -> PackageHit {
         PackageHit {
@@ -993,6 +1062,97 @@ mod tests {
         assert_eq!(app.upgrade_scope_pending(2), 1); // aur
         assert_eq!(app.upgrade_scope_label(1), "repo");
         assert_eq!(app.upgrade_scope_label(2), "aur");
+    }
+
+    fn spec(name: &str, action: Action) -> ActionSpec {
+        ActionSpec {
+            targets: vec![name.into()],
+            source_id: SourceId::Pacman,
+            action,
+            command: CommandLine { program: "true".into(), args: vec![] },
+        }
+    }
+
+    #[test]
+    fn enqueue_and_dequeue_preserve_order() {
+        let mut app = App::new(vec![SourceId::Pacman]);
+        app.enqueue(spec("a", Action::Install));
+        app.enqueue(spec("b", Action::Remove));
+        assert_eq!(app.queue.len(), 2);
+        assert_eq!(app.dequeue_next().unwrap().targets, vec!["a"]);
+        assert_eq!(app.dequeue_next().unwrap().targets, vec!["b"]);
+        assert!(app.dequeue_next().is_none());
+    }
+
+    #[test]
+    fn remove_queued_drops_item_and_clamps_selection() {
+        let mut app = App::new(vec![SourceId::Pacman]);
+        for n in ["a", "b", "c"] {
+            app.enqueue(spec(n, Action::Install));
+        }
+        app.queue_selected = 2;
+        app.remove_queued(2);
+        let names: Vec<&str> = app.queue.iter().map(|s| s.targets[0].as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+        assert_eq!(app.queue_selected, 1); // clamped into the shorter list
+        app.remove_queued(5); // out of range is a no-op
+        assert_eq!(app.queue.len(), 2);
+    }
+
+    #[test]
+    fn clear_queue_empties_and_resets_pause() {
+        let mut app = App::new(vec![SourceId::Pacman]);
+        app.enqueue(spec("a", Action::Install));
+        app.queue_paused = true;
+        app.queue_selected = 0;
+        app.clear_queue();
+        assert!(app.queue.is_empty());
+        assert!(!app.queue_paused);
+        assert_eq!(app.queue_selected, 0);
+    }
+
+    #[test]
+    fn move_queue_clamps_to_pending_range() {
+        let mut app = App::new(vec![SourceId::Pacman]);
+        for n in ["a", "b"] {
+            app.enqueue(spec(n, Action::Install));
+        }
+        app.move_queue(-5);
+        assert_eq!(app.queue_selected, 0);
+        app.move_queue(10);
+        assert_eq!(app.queue_selected, 1);
+    }
+
+    #[test]
+    fn update_source_for_reads_updates_list() {
+        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        app.updates_list = vec![
+            UpdateEntry { name: "firefox".into(), old_version: "1".into(), new_version: "2".into(), source_id: SourceId::Pacman },
+            UpdateEntry { name: "yay".into(), old_version: "1".into(), new_version: "2".into(), source_id: SourceId::Aur },
+        ];
+        assert_eq!(app.update_source_for("firefox"), Some(SourceId::Pacman));
+        assert_eq!(app.update_source_for("yay"), Some(SourceId::Aur));
+        assert_eq!(app.update_source_for("zoxide"), None);
+    }
+
+    #[test]
+    fn upgrade_one_spec_for_selected_updatable_package() {
+        let mut app = App::new(vec![SourceId::Pacman]);
+        app.installed_list = vec![ipkg("firefox"), ipkg("zoxide")];
+        app.updates_list = vec![UpdateEntry {
+            name: "firefox".into(),
+            old_version: "1".into(),
+            new_version: "2".into(),
+            source_id: SourceId::Pacman,
+        }];
+        // firefox floats to the top (has an update), so it is selected at index 0.
+        let s = app.upgrade_one_spec().expect("spec");
+        assert_eq!(s.action, Action::Upgrade);
+        assert_eq!(s.targets, vec!["firefox"]);
+        assert_eq!(s.command.args, vec!["pacman", "-S", "firefox"]);
+        // A package with no pending update yields nothing.
+        app.installed_selected = 1; // zoxide
+        assert!(app.upgrade_one_spec().is_none());
     }
 
     #[test]

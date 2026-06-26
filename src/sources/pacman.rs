@@ -112,21 +112,35 @@ pub fn parse_si_output(text: &str) -> PackageDetail {
                 last_key = None;
             }
         } else if let Some(k) = &last_key {
+            // Fold continuation lines with a newline so list values that wrap
+            // (Optional Deps lists one entry per line) stay separable.
             let entry = fields.entry(k.clone()).or_default();
-            entry.push(' ');
+            entry.push('\n');
             entry.push_str(line.trim());
         }
     }
 
-    // "None" is pacman's empty-marker for several fields.
+    // Scalar field: collapse any wrapped whitespace to single spaces. "None" is
+    // pacman's empty-marker for several fields.
     let val = |k: &str| {
         fields
             .get(k)
-            .map(|s| s.trim().to_string())
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|s| !s.is_empty() && s != "None")
     };
     let depends = val("Depends On")
         .map(|s| s.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default();
+    // Optional deps keep their reasons, so split per line, not per word.
+    let optional_depends = fields
+        .get("Optional Deps")
+        .map(|s| {
+            s.split('\n')
+                .map(str::trim)
+                .filter(|e| !e.is_empty() && *e != "None")
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
 
     // Package web page on archlinux.org needs repo + arch + name (all in -Si).
@@ -144,6 +158,7 @@ pub fn parse_si_output(text: &str) -> PackageDetail {
         install_size: val("Installed Size"),
         build_date: val("Build Date"),
         depends,
+        optional_depends,
         maintainer: val("Packager"),
         popularity: None,
     }
@@ -196,6 +211,7 @@ Licenses        : MPL-2.0
 Depends On      : gtk3  libxss  nss  ttf-font  dbus  libpulse
                   alsa-lib  ffmpeg
 Optional Deps   : networkmanager: Easily switch networks [installed]
+                  hunspell: Spell checking
 Installed Size  : 232.50 MiB
 Packager        : Some Maintainer <pkg@example.org>
 Build Date      : Wed 20 Jun 2026 10:00:00 AM
@@ -218,6 +234,14 @@ Validated By    : Signature
         assert_eq!(
             d.depends,
             vec!["gtk3", "libxss", "nss", "ttf-font", "dbus", "libpulse", "alsa-lib", "ffmpeg"]
+        );
+        // optional deps keep their per-entry reason text, one entry per line
+        assert_eq!(
+            d.optional_depends,
+            vec![
+                "networkmanager: Easily switch networks [installed]",
+                "hunspell: Spell checking",
+            ]
         );
     }
 

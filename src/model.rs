@@ -117,6 +117,9 @@ pub struct PackageDetail {
     /// pacman build date, as reported. pacman only.
     pub build_date: Option<String>,
     pub depends: Vec<String>,
+    /// Optional dependencies, each as the source reports it ("name: reason").
+    /// Kept apart from `depends` so the UI never conflates the two.
+    pub optional_depends: Vec<String>,
     /// AUR maintainer handle. AUR only.
     pub maintainer: Option<String>,
     /// AUR popularity score. AUR only.
@@ -326,6 +329,14 @@ pub struct UpdatesInfo {
     pub aur: Option<usize>,
 }
 
+/// The bare package name from a dependency string, dropping version
+/// constraints (`glibc>=2.36`) and optional-dep reasons (`foo: needed for X`).
+/// Used to look a dependency up in the installed index.
+pub fn dep_pkg_name(dep: &str) -> &str {
+    let end = dep.find(['<', '>', '=', ':']).unwrap_or(dep.len());
+    dep[..end].trim()
+}
+
 /// Whole days between `ts` and `now` (unix seconds), clamped at 0.
 pub fn days_ago(ts: i64, now: i64) -> i64 {
     (now - ts).max(0) / 86_400
@@ -339,6 +350,14 @@ mod tests {
     fn source_badges() {
         assert_eq!(SourceId::Pacman.badge(), "repo");
         assert_eq!(SourceId::Aur.badge(), "aur");
+    }
+
+    #[test]
+    fn dep_pkg_name_strips_constraints_and_reasons() {
+        assert_eq!(dep_pkg_name("gtk3"), "gtk3");
+        assert_eq!(dep_pkg_name("glibc>=2.36"), "glibc");
+        assert_eq!(dep_pkg_name("foo=1.0"), "foo");
+        assert_eq!(dep_pkg_name("networkmanager: easily switch networks"), "networkmanager");
     }
 
     #[test]

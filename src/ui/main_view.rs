@@ -130,9 +130,11 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
             if !pkg_icon.is_empty() {
                 spans.push(Span::styled(format!("{pkg_icon} "), Style::default().fg(pal.muted)));
             }
+            // Installed packages show their name green wherever they appear.
+            let name_color = if row.any_installed() { pal.installed } else { pal.fg };
             spans.push(Span::styled(
                 format!("{:<28} ", truncate(&row.name, 28)),
-                Style::default().fg(pal.fg),
+                Style::default().fg(name_color),
             ));
             for prov in &shown {
                 spans.push(crate::ui::badge_span(app, app.provider_badge(prov), prov.source_id));

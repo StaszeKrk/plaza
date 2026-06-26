@@ -105,6 +105,8 @@ struct RpcInfoResult {
     popularity: Option<f64>,
     #[serde(rename = "Depends")]
     depends: Option<Vec<String>>,
+    #[serde(rename = "OptDepends")]
+    opt_depends: Option<Vec<String>>,
     #[serde(rename = "License")]
     license: Option<Vec<String>>,
 }
@@ -122,6 +124,7 @@ pub fn parse_info_response(body: &str) -> Option<PackageDetail> {
         install_size: None,
         build_date: None,
         depends: r.depends.unwrap_or_default(),
+        optional_depends: r.opt_depends.unwrap_or_default(),
         maintainer: r.maintainer,
         popularity: r.popularity,
     })
@@ -168,13 +171,15 @@ mod tests {
     fn parses_info_detail() {
         let body = r#"{"resultcount":1,"results":[
           {"Name":"firefox-git","URL":"https://www.mozilla.org","Maintainer":"alice",
-           "Popularity":0.41,"Depends":["gtk3","nss"],"License":["MPL-2.0","GPL"]}
+           "Popularity":0.41,"Depends":["gtk3","nss"],"OptDepends":["ffmpeg: video"],
+           "License":["MPL-2.0","GPL"]}
         ],"type":"multiinfo","version":5}"#;
         let d = parse_info_response(body).unwrap();
         assert_eq!(d.url.as_deref(), Some("https://www.mozilla.org"));
         assert_eq!(d.maintainer.as_deref(), Some("alice"));
         assert_eq!(d.popularity, Some(0.41));
         assert_eq!(d.depends, vec!["gtk3", "nss"]);
+        assert_eq!(d.optional_depends, vec!["ffmpeg: video"]);
         assert_eq!(d.licenses.as_deref(), Some("MPL-2.0, GPL"));
         assert_eq!(
             d.repo_url.as_deref(),

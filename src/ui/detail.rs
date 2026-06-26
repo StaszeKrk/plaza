@@ -1,5 +1,6 @@
 use crate::app::{App, Focus};
-use crate::model::{days_ago, PackageDetail, Provider, SourceId};
+use crate::model::{days_ago, dep_pkg_name, PackageDetail, Provider, SourceId};
+use crate::sources::installed::InstalledIndex;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -9,6 +10,35 @@ use ratatui::Frame;
 /// How many dependency names to list before eliding the rest with "…".
 const MAX_DEPS_SHOWN: usize = 8;
 
+/// A "depends:"/"optional:" line: each dep is its bare package name, colored
+/// green when already installed so you can spot what you have at a glance.
+/// `None` when there are no deps to show.
+fn deps_line(
+    label: &str,
+    deps: &[String],
+    installed: &InstalledIndex,
+    pal: &crate::theme::palette::Palette,
+) -> Option<Line<'static>> {
+    if deps.is_empty() {
+        return None;
+    }
+    let muted = Style::default().fg(pal.muted);
+    let green = Style::default().fg(pal.installed);
+    let mut spans = vec![Span::styled(format!("  {label} "), muted)];
+    for (i, dep) in deps.iter().take(MAX_DEPS_SHOWN).enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" ", muted));
+        }
+        let name = dep_pkg_name(dep);
+        let style = if installed.is_installed(name) { green } else { muted };
+        spans.push(Span::styled(name.to_string(), style));
+    }
+    if deps.len() > MAX_DEPS_SHOWN {
+        spans.push(Span::styled(" …", muted));
+    }
+    Some(Line::from(spans))
+}
+
 /// Indented sub-lines under a provider row: size/build date (pacman), recency
 /// and popularity (AUR), plus shared dependencies and license. Only fields that
 /// are present render, so the rows fill in as fetched detail arrives.
@@ -16,6 +46,7 @@ fn detail_lines(
     p: &Provider,
     detail: Option<&PackageDetail>,
     now: i64,
+    installed: &InstalledIndex,
     pal: &crate::theme::palette::Palette,
 ) -> Vec<Line<'static>> {
     let muted = Style::default().fg(pal.muted);
@@ -55,11 +86,8 @@ fn detail_lines(
         if let Some(u) = &d.repo_url {
             lines.push(Line::from(Span::styled(format!("  {u}"), Style::default().fg(pal.accent))));
         }
-        if !d.depends.is_empty() {
-            let shown = d.depends.iter().take(MAX_DEPS_SHOWN).cloned().collect::<Vec<_>>().join(" ");
-            let more = if d.depends.len() > MAX_DEPS_SHOWN { " …" } else { "" };
-            lines.push(Line::from(Span::styled(format!("  depends: {shown}{more}"), muted)));
-        }
+        lines.extend(deps_line("depends:", &d.depends, installed, pal));
+        lines.extend(deps_line("optional:", &d.optional_depends, installed, pal));
         if let Some(lic) = &d.licenses {
             lines.push(Line::from(Span::styled(format!("  license: {lic}"), muted)));
         }
@@ -156,20 +184,36 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             if !note.is_empty() {
                 spans.push(Span::styled(note, Style::default().fg(col)));
             }
-            let mut lines = vec![Line::from(spans)];
-            let detail = app.details.get(&p.detail_key(&row.name));
-            lines.extend(detail_lines(p, detail, now, pal));
-            ListItem::new(lines)
+            // One line per provider: the selection bar then highlights a single
+            // row cleanly. The selected provider's detail renders below the list.
+            ListItem::new(Line::from(spans))
         })
         .collect();
+
+    // Detail of the selected provider (rendered un-highlighted under the list).
+    let selected = app.detail_selected.min(providers.len().saturating_sub(1));
+    let detail_body: Vec<Line> = providers
+        .get(selected)
+        .map(|p| {
+            let detail = app.details.get(&p.detail_key(&row.name));
+            detail_lines(p, detail, now, &app.installed, pal)
+        })
+        .unwrap_or_default();
 
     let inner = crate::ui::themed_block(app, border, " detail · ⏎ install · esc back ");
     let list_area = inner.inner(area);
     frame.render_widget(inner, area);
 
+    // Cap the provider list height so the detail pane always keeps room; the
+    // list scrolls if a package somehow has more providers than that.
+    let list_height = (providers.len() as u16).clamp(1, 6);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(header_height), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Length(list_height),
+            Constraint::Min(0),
+        ])
         .split(list_area);
     frame.render_widget(header, chunks[0]);
 
@@ -178,7 +222,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .highlight_symbol(&cursor);
     let mut state = ListState::default();
     if !providers.is_empty() {
-        state.select(Some(app.detail_selected.min(providers.len() - 1)));
+        state.select(Some(selected));
     }
     frame.render_stateful_widget(list, chunks[1], &mut state);
+
+    frame.render_widget(Paragraph::new(detail_body), chunks[2]);
 }

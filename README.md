@@ -33,11 +33,19 @@ Manage:
   `-Rns` or `-R`, set in options).
 - Upgrades per source or all at once. "All" chains each source in one task
   (`sudo pacman -Syu && paru -Sua`, using whichever AUR helper you have).
+- Upgrades a single highlighted package with `u`, when it has a pending update.
 
 General:
 
 - Actions run in a background pane backed by a real terminal, so sudo prompts and
   AUR build questions work normally. A hotkey returns you to it.
+- Confirming an action adds it to a queue. The queue runs one task at a time,
+  moves on by itself when a task succeeds, and pauses on a failure for you to
+  dismiss or clear. Auto-advance does not pull you back to the pane, and queued
+  items can be removed one at a time from it.
+- When a running task stops at a prompt (sudo password, a pacman or AUR
+  question) and you are not on the action pane, the status bar tells you it is
+  waiting for input and which key opens the pane to answer.
 - A small options menu (press `o`): hide the keybinding hints, collapse all repos
   into one `[official]` badge, switch the color palette and skin (see
   [Theming](#theming)), set the search delay, pick the remove depth, and choose
@@ -97,8 +105,10 @@ Plaza has two modes, like a tiling layout you tab around:
 | / | jump to the search bar from anywhere |
 | Enter (on a result) | open it, then Enter on a source to install |
 | r, Enter (in Manage list) | remove the selected package |
+| u (in Manage list) | upgrade the selected package, if it has an update |
 | h/l then Enter (on the upgrade chips) | upgrade that scope |
 | backtick | open or collapse the action pane |
+| j/k, d, x (in the action pane) | move within the queue, remove the selected item, or clear it |
 | Ctrl-C in a focused action | cancel that action |
 | o | options |
 | q | quit; during an action it switches to the action instead |

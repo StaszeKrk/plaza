@@ -49,6 +49,10 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 
     let para = Paragraph::new(lines)
         .alignment(Alignment::Center)
-        .block(crate::ui::themed_block(app, pal.border_idle, " plaza "));
+        .block(crate::ui::themed_block(
+            app,
+            crate::ui::border_color(app, crate::app::Focus::Main),
+            " plaza ",
+        ));
     frame.render_widget(para, area);
 }

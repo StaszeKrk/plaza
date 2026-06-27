@@ -136,7 +136,7 @@ cycle through the built-ins plus anything you have added, and the choice is save
 to `~/.config/plaza/settings.json`.
 
 Built-in palettes: `plaza-dusk` (default), `gruvbox`, `nord`, `dracula`,
-`tokyo-night`, `solarized-dark`, and `ansi` (which uses your terminal's own 16
+`tokyo-night`, `solarized-dark`, `catppuccin-mocha`, and `ansi` (which uses your terminal's own 16
 colors, so it follows whatever theme the terminal is set to). Built-in skins:
 `soft` (default), `sharp`, and `plain` (square borders and no Nerd Font glyphs,
 for terminals without one).

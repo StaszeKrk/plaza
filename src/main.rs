@@ -913,7 +913,13 @@ fn request_upgrade(app: &mut App) {
 fn request_install(app: &mut App) {
     let Some(row) = app.selected_row() else { return };
     let providers = app.effective_providers(row);
-    let Some(provider) = providers.get(app.detail_selected) else { return };
+    if providers.is_empty() {
+        return;
+    }
+    // Clamp like the detail view does, so a filter change that shrank the
+    // provider list cannot make install target a different row than the one
+    // highlighted on screen.
+    let provider = &providers[app.detail_selected.min(providers.len() - 1)];
     let source_id = provider.source_id;
     // Installing from the AUR needs a helper; surface a message when none exists.
     // Pacman ignores the helper, so an empty binary is harmless for that branch.

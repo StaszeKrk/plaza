@@ -112,6 +112,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .position(|p| p.source_id == SourceId::Pacman);
 
+
     // Project homepage: prefer the default provider's, else the first that has one.
     let url = providers
         .get(default_idx.unwrap_or(0))
@@ -138,6 +139,25 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(u) = &url {
         header_lines.push(Line::from(Span::styled(u.clone(), Style::default().fg(pal.accent))));
     }
+    // Package-level installed state: pacman cannot say which repo it came from,
+    // only whether it is foreign (AUR) or official, so state that once here
+    // rather than implying a specific source for every provider below.
+    if let Some(iv) = app.installed.version(&row.name) {
+        let foreign = app
+            .installed_list
+            .iter()
+            .find(|ip| ip.name == row.name)
+            .map(|ip| ip.origin == "aur");
+        let origin = match foreign {
+            Some(true) => " · aur",
+            Some(false) => " · official",
+            None => "",
+        };
+        header_lines.push(Line::from(Span::styled(
+            format!("installed {iv}{origin}"),
+            Style::default().fg(pal.installed),
+        )));
+    }
     header_lines.push(Line::from(""));
     let header_height = header_lines.len() as u16;
     let header = Paragraph::new(header_lines);
@@ -157,16 +177,6 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 Span::raw("  "),
                 Span::styled(format!("{:<14} ", p.version), Style::default().fg(pal.fg)),
             ];
-            if p.installed {
-                spans.push(Span::styled(
-                    format!(
-                        "{} {}  ",
-                        crate::ui::ic_check(app),
-                        p.installed_version.as_deref().unwrap_or("")
-                    ),
-                    Style::default().fg(pal.installed),
-                ));
-            }
             let (note, col) = if let Some(votes) = p.meta.votes {
                 let m = if p.meta.maintained { "maintained" } else { "orphaned" };
                 if p.meta.out_of_date {

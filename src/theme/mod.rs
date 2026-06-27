@@ -26,6 +26,7 @@ const BUILTIN_PALETTES: &[(&str, &str)] = &[
     ("dracula", include_str!("palettes/dracula.toml")),
     ("tokyo-night", include_str!("palettes/tokyo-night.toml")),
     ("solarized-dark", include_str!("palettes/solarized-dark.toml")),
+    ("catppuccin-mocha", include_str!("palettes/catppuccin-mocha.toml")),
     ("ansi", include_str!("palettes/ansi.toml")),
 ];
 
@@ -192,8 +193,8 @@ mod tests {
     fn all_builtin_palettes_parse() {
         let (reg, errs) = palette_registry(None);
         assert!(errs.is_empty(), "{errs:?}");
-        // plaza-dusk + 6 presets
-        assert_eq!(reg.len(), 7);
+        // plaza-dusk + 7 presets
+        assert_eq!(reg.len(), 8);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use tui_term::widget::PseudoTerminal;
 
 pub fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
     let Some(task) = &app.task else { return };
-    let (title, color) = status_title(app, task);
+    let (title, _) = status_title(app, task);
     let done = matches!(task.state, TaskState::Done { .. });
     let last_line = task
         .parser
@@ -42,10 +42,23 @@ pub fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
     };
     body.push_str(&format!("\n\n{hint}"));
 
+    // The peek has only two states: focused (you navigated onto it) or not.
+    // Enter expands to the overlay rather than "interacting", so it never goes
+    // active. Focus shows the highlight. Otherwise the border stays calm while
+    // running (it is not an alert) and only lights up green/red on finish.
+    let border = if app.focus == crate::app::Focus::TaskPane {
+        app.palette.border_active
+    } else {
+        match task.state {
+            TaskState::Done { success: true, .. } => app.palette.success,
+            TaskState::Done { success: false, .. } => app.palette.danger,
+            TaskState::Running => app.palette.border_idle,
+        }
+    };
     let p = Paragraph::new(body)
         .style(Style::default().fg(app.palette.fg))
         .wrap(Wrap { trim: true })
-        .block(crate::ui::themed_block(app, color, title));
+        .block(crate::ui::themed_block(app, border, title));
     frame.render_widget(p, area);
 }
 

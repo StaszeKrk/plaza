@@ -161,7 +161,10 @@ mod tests {
                 Ok(Some(AppEvent::ActionFinished { success, code, .. })) => {
                     task.state = TaskState::Done { success, code };
                     finished = true;
-                    break;
+                    // Don't break: PtyOutput and ActionFinished come from two
+                    // separate threads, so the finish event can arrive before
+                    // buffered output. Keep draining until the channel closes
+                    // (both sender threads drop tx) so we never miss output.
                 }
                 Ok(Some(_)) => {}
                 Ok(None) => break,

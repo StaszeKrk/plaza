@@ -316,6 +316,10 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
             format!("    Remove depth: {}", app.settings.remove_depth.label()),
         ),
         row(sel == 6, format!("    AUR helper: {}", aur_helper_label(app))),
+        row(
+            sel == 7,
+            format!("{} Hide filter box when not in use", check(app.settings.hide_idle_filter)),
+        ),
         Line::from(""),
         Line::from(Span::styled(
             "  \u{2191}\u{2193} move \u{b7} space toggle/cycle \u{b7} esc close",

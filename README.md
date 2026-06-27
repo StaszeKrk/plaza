@@ -39,8 +39,10 @@ General:
 
 - Filters either list by repository. Press `f` for a checkbox box in the sidebar
   to show only the repos you pick (toggle one repo, all pacman repos at once, or
-  the AUR). It follows the collapse-repos option and stays on screen while a
-  filter is active. The selection resets each launch.
+  the AUR). It follows the collapse-repos option. By default the box appears only
+  while you are in it or while a filter is active; turn off "hide filter box when
+  not in use" in options to keep it on screen at all times. The selection resets
+  each launch.
 - Actions run in a background pane backed by a real terminal, so sudo prompts and
   AUR build questions work normally. A hotkey returns you to it.
 - Confirming an action adds it to a queue. The queue runs one task at a time,
@@ -52,9 +54,9 @@ General:
   waiting for input and which key opens the pane to answer.
 - A small options menu (press `o`): hide the keybinding hints, collapse all repos
   into one `[official]` badge, switch the color palette and skin (see
-  [Theming](#theming)), set the search delay, pick the remove depth, and choose
-  the AUR helper (auto, yay, or paru). Settings are saved to
-  `~/.config/plaza/settings.json`.
+  [Theming](#theming)), set the search delay, pick the remove depth, choose
+  the AUR helper (auto, yay, or paru), and whether the filter box hides when it
+  is not in use. Settings are saved to `~/.config/plaza/settings.json`.
 
 ## Requirements
 

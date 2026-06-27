@@ -158,9 +158,6 @@ pub struct App {
     pub repo_filter_off: BTreeSet<String>,
     pub filter_repos: Vec<String>,
     pub filter_selected: usize,
-    /// Whether the filter box is open for editing. It also stays on screen while
-    /// a filter is active (see `filter_box_visible`).
-    pub filter_open: bool,
     /// Upgradable packages (repos + AUR); drives the scope chips and `↑` markers.
     pub updates_list: Vec<UpdateEntry>,
     /// Selected upgrade-scope chip: 0 = All, 1..=n = the nth present source.
@@ -256,7 +253,6 @@ impl App {
             repo_filter_off: BTreeSet::new(),
             filter_repos: Vec::new(),
             filter_selected: 0,
-            filter_open: false,
             updates_list: Vec::new(),
             upgrade_scope_selected: 0,
             interacting: true,
@@ -339,7 +335,7 @@ impl App {
     // --- Options overlay ---
 
     /// Number of option rows.
-    pub const OPTIONS_COUNT: usize = 7;
+    pub const OPTIONS_COUNT: usize = 8;
 
     pub fn move_options(&mut self, delta: i32) {
         let max = Self::OPTIONS_COUNT as i32 - 1;
@@ -356,6 +352,7 @@ impl App {
             4 => self.settings.debounce_ms = next_debounce(self.settings.debounce_ms),
             5 => self.settings.remove_depth = self.settings.remove_depth.next(),
             6 => self.cycle_aur_helper(),
+            7 => self.settings.hide_idle_filter = !self.settings.hide_idle_filter,
             _ => {}
         }
         self.settings.save();
@@ -622,18 +619,19 @@ impl App {
             .collect();
         rows.sort_by(|a, b| {
             let (au, bu) = (updates.contains(a.name.as_str()), updates.contains(b.name.as_str()));
-            bu.cmp(&au)
-                .then_with(|| rank(&q, &a.name).cmp(&rank(&q, &b.name)))
-                // Shorter-name-first only helps when ranking a real query; with an
-                // empty filter every name ranks equal, so go straight to alphabetical.
-                .then_with(|| {
-                    if q.is_empty() {
-                        std::cmp::Ordering::Equal
-                    } else {
-                        a.name.len().cmp(&b.name.len())
-                    }
-                })
-                .then_with(|| a.name.cmp(&b.name))
+            if q.is_empty() {
+                // No filter: float upgradable packages up, then alphabetical.
+                bu.cmp(&au).then_with(|| a.name.cmp(&b.name))
+            } else {
+                // Filtering: match quality (exact > prefix > substring) wins over the
+                // upgradable float, so typing a name surfaces it even if something
+                // upgradable also matches. Upgradable breaks ties within a rank.
+                rank(&q, &a.name)
+                    .cmp(&rank(&q, &b.name))
+                    .then_with(|| bu.cmp(&au))
+                    .then_with(|| a.name.len().cmp(&b.name.len()))
+                    .then_with(|| a.name.cmp(&b.name))
+            }
         });
         rows
     }
@@ -661,10 +659,13 @@ impl App {
         !self.repo_filter_off.contains(repo)
     }
 
-    /// The box is on screen when open for editing, or kept up because a filter is
-    /// active (so it doubles as the "filter active" indicator).
+    /// With the hide-when-idle option off, the box is always on screen. With it
+    /// on, the box shows only while it is the focused panel (opened or hovered) or
+    /// while a filter is active (so it doubles as the "filter active" indicator).
     pub fn filter_box_visible(&self) -> bool {
-        self.filter_open || !self.repo_filter_off.is_empty()
+        !self.settings.hide_idle_filter
+            || self.focus == Focus::Filter
+            || !self.repo_filter_off.is_empty()
     }
 
     /// True when no pacman repo is filtered out (drives the master checkbox).
@@ -745,25 +746,23 @@ impl App {
 
     /// Open the filter box and focus it (the `f` key).
     pub fn open_filter(&mut self) {
-        self.filter_open = true;
         self.focus = Focus::Filter;
         self.interacting = true;
         self.filter_selected = self.filter_selected.min(self.filter_checkboxes().len().saturating_sub(1));
     }
 
-    /// Close the filter box. It stays rendered if a filter is active, but loses
-    /// focus back to the content area.
+    /// Close the filter box: move focus back to the content area. It stays
+    /// rendered only if a filter is active (and not hidden when idle).
     pub fn close_filter(&mut self) {
-        self.filter_open = false;
         if self.focus == Focus::Filter {
             self.focus = self.content_landing();
             self.interacting = false;
         }
     }
 
-    /// `f`: toggle the box open/closed.
+    /// `f`: toggle the box open/closed, based on whether it currently has focus.
     pub fn toggle_filter_open(&mut self) {
-        if self.filter_open {
+        if self.focus == Focus::Filter {
             self.close_filter();
         } else {
             self.open_filter();
@@ -1033,7 +1032,7 @@ mod tests {
 
     #[test]
     fn options_count_matches_rows() {
-        assert_eq!(App::OPTIONS_COUNT, 7);
+        assert_eq!(App::OPTIONS_COUNT, 8);
     }
 
     #[test]
@@ -1111,6 +1110,23 @@ mod tests {
         app.manage_filter = "fire".into();
         let rows: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
         assert_eq!(rows, vec!["firewalld", "firefox"]);
+    }
+
+    #[test]
+    fn manage_filter_match_beats_upgradable() {
+        let mut app = App::new(vec![SourceId::Pacman]);
+        // "libfire" is upgradable but only a substring match; "firefox" is a prefix
+        // match with no update. The prefix match must win over the upgradable float.
+        app.installed_list = vec![ipkg("firefox"), ipkg("libfire")];
+        app.updates_list = vec![UpdateEntry {
+            name: "libfire".into(),
+            old_version: "1".into(),
+            new_version: "2".into(),
+            source_id: SourceId::Pacman,
+        }];
+        app.manage_filter = "fire".into();
+        let rows: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(rows, vec!["firefox", "libfire"]);
     }
 
     #[test]
@@ -1451,14 +1467,34 @@ mod tests {
     }
 
     #[test]
-    fn filter_box_visible_when_open_or_active() {
+    fn filter_box_visible_follows_option() {
         let mut app = app_with_repos();
-        assert!(!app.filter_box_visible());
-        app.filter_open = true;
+        // Option off: always on screen, regardless of focus or active filter.
+        app.settings.hide_idle_filter = false;
+        app.focus = Focus::Search;
         assert!(app.filter_box_visible());
-        app.filter_open = false;
+        // Option on: shows only while focused or while a filter is active.
+        app.settings.hide_idle_filter = true;
+        assert!(!app.filter_box_visible());
+        app.focus = Focus::Filter;
+        assert!(app.filter_box_visible()); // focused (open or hovered)
+        app.focus = Focus::Search;
         app.repo_filter_off.insert("extra".into());
         assert!(app.filter_box_visible()); // active filter keeps it up
+    }
+
+    #[test]
+    fn leaving_filter_box_does_not_strand_it_visible() {
+        // Regression: opening the box then jumping away (e.g. `/` or Tab) used to
+        // leave a stranded "open" flag that pinned the box on screen and defeated
+        // the hide-when-idle option. Visibility now follows focus.
+        let mut app = app_with_repos();
+        app.settings.hide_idle_filter = true;
+        app.open_filter(); // `f`
+        assert_eq!(app.focus, Focus::Filter);
+        assert!(app.filter_box_visible());
+        app.focus = Focus::Search; // `/` jumps away without close_filter
+        assert!(!app.filter_box_visible());
     }
 
     #[test]

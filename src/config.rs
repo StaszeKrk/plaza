@@ -18,6 +18,9 @@ pub struct Settings {
     pub remove_depth: RemoveDepth,
     /// Which AUR helper to drive for install/upgrade. `Auto` picks paru, else yay.
     pub aur_helper: AurHelper,
+    /// When on, the repo-filter box shows only while it is focused or while a
+    /// filter is active. When off, the box is always on screen. On by default.
+    pub hide_idle_filter: bool,
     /// Active color palette name (built-in or a file in
     /// `~/.config/plaza/palettes/`).
     pub palette: String,
@@ -33,6 +36,7 @@ impl Default for Settings {
             debounce_ms: 400,
             remove_depth: RemoveDepth::WithDeps,
             aur_helper: AurHelper::Auto,
+            hide_idle_filter: true,
             palette: crate::theme::DEFAULT_PALETTE.to_string(),
             skin: crate::theme::DEFAULT_SKIN.to_string(),
         }

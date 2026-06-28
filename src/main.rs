@@ -204,7 +204,7 @@ fn handle_event(
             let mut prompt = app.needs_input;
             if let Some(task) = &mut app.task {
                 if task.id == id {
-                    task.parser.process(&bytes);
+                    task.feed(&bytes);
                     if !watching {
                         task.has_unseen_output = true;
                     }

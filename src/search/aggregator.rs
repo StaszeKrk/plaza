@@ -94,13 +94,25 @@ fn bucket_key(
     is_stripped: bool,
     map: &HashMap<String, PackageRow>,
 ) -> String {
-    // Flatpak: bridge onto an existing repo/AUR bucket by normalized human name
-    // (grouping on), else stand alone in its own app-ID bucket.
+    // Flatpak: bridge onto an existing repo/AUR bucket (grouping on), else stand
+    // alone in its own app-ID bucket. Bridge by normalized human name first, then
+    // by the app-ID's reverse-DNS tail. Both only fold into a bucket that already
+    // exists, so a generic tail (com.spotify.Client -> "client") stays standalone
+    // unless a real package of that name is present; org.gimp.GIMP -> "gimp"
+    // joins the gimp row.
     if hit.source_id == SourceId::Flatpak {
         if group_variants {
             let nk = format!("name:{}", normalize_key(&hit.name, true));
             if map.contains_key(&nk) {
                 return nk;
+            }
+            if let Some(id) = &hit.meta.canonical_id {
+                if let Some(tail) = id.rsplit('.').next() {
+                    let tk = format!("name:{}", tail.to_lowercase());
+                    if map.contains_key(&tk) {
+                        return tk;
+                    }
+                }
             }
         }
         if let Some(id) = &hit.meta.canonical_id {
@@ -254,14 +266,31 @@ mod tests {
     }
 
     #[test]
-    fn multiword_flatpak_name_stays_standalone() {
+    fn flatpak_tail_bridges_onto_existing_bucket() {
         let inst = InstalledIndex::default();
+        // GIMP's human name ("GNU Image Manipulation Program") does not match, but
+        // the app-ID tail "GIMP" exact-matches the existing "gimp" bucket.
         let hits = vec![
-            fhit("code", SourceId::Pacman, None),
-            fhit("Visual Studio Code", SourceId::Flatpak, Some("com.visualstudio.code")),
+            fhit("gimp", SourceId::Pacman, None),
+            fhit("GNU Image Manipulation Program", SourceId::Flatpak, Some("org.gimp.GIMP")),
         ];
         let rows = merge(hits, &inst, true);
-        assert_eq!(rows.len(), 2); // no false merge onto "code"
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "gimp");
+        assert!(rows[0].providers.iter().any(|p| p.source_id == SourceId::Flatpak));
+    }
+
+    #[test]
+    fn flatpak_stays_standalone_when_neither_name_nor_tail_matches() {
+        let inst = InstalledIndex::default();
+        // Neither the multi-word human name nor the tail ("Frobnicator") matches
+        // any existing bucket, so no false merge onto "code".
+        let hits = vec![
+            fhit("code", SourceId::Pacman, None),
+            fhit("Some Cool Tool", SourceId::Flatpak, Some("com.example.Frobnicator")),
+        ];
+        let rows = merge(hits, &inst, true);
+        assert_eq!(rows.len(), 2);
     }
 
     #[test]

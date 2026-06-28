@@ -10,15 +10,23 @@ Manage view lists everything installed, shows what has updates, and lets you rem
 or upgrade without leaving Plaza. Actions run in a background pane backed by a real
 terminal, so you can keep working while one runs.
 
-Plaza is Arch-only for now (pacman and the AUR). The source backends sit behind a
-trait, so apt, dnf, zypper, flatpak, and snap can be added later.
+Plaza is Arch-focused (pacman and the AUR) and also searches Flatpak (Flathub)
+when it is set up. The source backends sit behind a trait, so apt, dnf, zypper,
+and snap can be added later.
 
 ## What it does
 
 Search:
 
-- Queries all sources at once. Packages with the same name across sources are
+- Queries all sources at once: the official repos, the AUR, and Flatpak
+  (Flathub) when it is configured. Packages with the same name across sources are
   merged into one row.
+- Groups name variants (`gimp`, `gimp-bin`, `gimp-git`) and a name-matching
+  Flatpak into a single row, so you pick the edition from the detail view.
+  Matching uses the Flatpak app ID, then a normalized name, so a Flatpak whose
+  app name matches a repo package joins its row (multi-word app names stay on
+  their own to avoid wrong merges). Turn it off with the "Group name variants and
+  Flatpak" option to get one row per exact name.
 - Shows every repo or source that provides a package, with versions and what is
   already installed. The repo pacman installs from by default is marked.
 - Can install from a specific repo instead of the default.
@@ -68,10 +76,10 @@ General:
   Manage, Filters, General): hide the keybinding hints, collapse all repos into
   one `[official]` badge, switch the color palette and skin (see
   [Theming](#theming)), set the search delay, pick the remove depth, choose the
-  AUR helper (auto, yay, or paru), choose whether the filter box hides when it is
-  not in use, and pick how the matched substring is drawn in result and Manage
-  names (off, color, underline, or both). Settings are saved to
-  `~/.config/plaza/settings.json`.
+  AUR helper (auto, yay, or paru), group name variants and a matching Flatpak
+  into one row, choose whether the filter box hides when it is not in use, and
+  pick how the matched substring is drawn in result and Manage names (off, color,
+  underline, or both). Settings are saved to `~/.config/plaza/settings.json`.
 
 ## Requirements
 
@@ -79,6 +87,8 @@ General:
 - an AUR helper (yay or paru), for AUR installs and upgrades. AUR search itself
   needs no helper; with neither installed you can still browse AUR results.
 - checkupdates (from pacman-contrib), for live update counts without root
+- flatpak with a remote configured (optional), to search and install from
+  Flatpak. Installs use `--user`. With no remote, the Flatpak source stays off.
 - Rust and Cargo, to build
 
 ## Install

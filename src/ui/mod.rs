@@ -145,6 +145,7 @@ pub fn cursor_symbol(app: &App) -> String {
 pub fn badge_span(app: &App, label: &str, source: SourceId) -> Span<'static> {
     let color = match source {
         SourceId::Aur => app.palette.badge_aur,
+        SourceId::Flatpak => app.palette.badge_flatpak,
         SourceId::Pacman if app.settings.collapse_repos => app.palette.badge_official,
         SourceId::Pacman => app.palette.badge_repo,
     };

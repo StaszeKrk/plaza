@@ -59,9 +59,10 @@ fn install_panic_hook() {
 }
 
 async fn run_tui() -> anyhow::Result<()> {
-    let detected = sources::detect_sources();
+    let settings = crate::config::Settings::load();
+    let detected = sources::detect_sources(&settings.disabled_sources);
     if detected.is_empty() {
-        eprintln!("plaza: no supported package sources detected (need pacman, and yay or paru for AUR)");
+        eprintln!("plaza: no supported package sources detected (need pacman, and yay or paru for AUR), or all sources disabled in options");
         std::process::exit(1);
     }
     let sources: Vec<Arc<dyn Source>> = detected.into_iter().map(Arc::from).collect();
@@ -84,7 +85,7 @@ async fn run_tui() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(source_ids);
+    let mut app = App::with_settings(source_ids, settings);
     // `checkupdates` (pacman-contrib) syncs a private db so update counts stay
     // live without root; without it we fall back to a stale `pacman -Qu`.
     app.has_checkupdates = sources::which("checkupdates");
@@ -459,14 +460,16 @@ fn dispatch_details(app: &mut App, tx: &UnboundedSender<AppEvent>) {
         if app.details.contains_key(&key) || app.detail_requested.contains(&key) {
             continue;
         }
-        to_fetch.push((p.source_id, p.meta.repo.clone(), key));
+        // Fetch the provider's own target (the real package name / app ID), not
+        // the row label, so a grouped variant (gimp-bin under "gimp") or a
+        // Flatpak app ID resolves to the right detail.
+        to_fetch.push((p.source_id, p.meta.repo.clone(), p.target.clone(), key));
     }
-    for (source_id, repo, key) in to_fetch {
+    for (source_id, repo, target, key) in to_fetch {
         app.detail_requested.insert(key.clone());
         let tx = tx.clone();
-        let name = name.clone();
         tokio::spawn(async move {
-            if let Some(detail) = fetch_detail(source_id, &name, repo.as_deref()).await {
+            if let Some(detail) = fetch_detail(source_id, &target, repo.as_deref()).await {
                 let _ = tx.send(AppEvent::PackageDetailLoaded { key, detail });
             }
         });
@@ -511,6 +514,18 @@ async fn fetch_detail(
         SourceId::Aur => {
             let body = reqwest::get(sources::aur::info_url(name)).await.ok()?.text().await.ok()?;
             sources::aur::parse_info_response(&body)
+        }
+        SourceId::Flatpak => {
+            // `name` is the app ID here (the provider target). `repo` is the
+            // remote. `--user --cached` keeps it local and prompt-free.
+            let remote = repo.unwrap_or("flathub");
+            let out = Command::new("flatpak")
+                .env("LC_ALL", "C")
+                .args(["remote-info", "--user", "--cached", remote, name])
+                .output()
+                .await
+                .ok()?;
+            Some(sources::flatpak::parse_remote_info(&String::from_utf8_lossy(&out.stdout)))
         }
     }
 }
@@ -1002,9 +1017,10 @@ async fn installed_index() -> sources::installed::InstalledIndex {
 
 async fn run_search_cli(term: &str) -> anyhow::Result<()> {
     use crate::search::aggregator::{merge, relevance_sort};
-    let sources = sources::detect_sources();
+    let settings = crate::config::Settings::load();
+    let sources = sources::detect_sources(&settings.disabled_sources);
     if sources.is_empty() {
-        eprintln!("plaza: no supported package sources detected (need pacman, and yay or paru for AUR)");
+        eprintln!("plaza: no supported package sources detected (need pacman, and yay or paru for AUR), or all sources disabled in options");
         std::process::exit(1);
     }
     let mut handles = Vec::new();
@@ -1023,7 +1039,7 @@ async fn run_search_cli(term: &str) -> anyhow::Result<()> {
         }
     }
     let idx = installed_index().await;
-    let mut rows = merge(all_hits, &idx);
+    let mut rows = merge(all_hits, &idx, settings.group_variants);
     relevance_sort(term, &mut rows);
     for row in &rows {
         let badges: Vec<&str> = row.providers.iter().map(|p| p.badge()).collect();

@@ -1,4 +1,4 @@
-use crate::model::{AurHelper, HighlightMode, ReasonFilter, RemoveDepth};
+use crate::model::{AurHelper, HighlightMode, ReasonFilter, RemoveDepth, SourceId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -34,6 +34,14 @@ pub struct Settings {
     pub default_manage_filter_off: Vec<String>,
     /// Default Manage installation-reason filter at launch.
     pub default_reason: ReasonFilter,
+    /// Collapse name variants (`gimp`/`gimp-bin`/`gimp-git`) and a name-matching
+    /// Flatpak into one row, picking the edition in the detail view. On by
+    /// default; off restores one row per exact name.
+    pub group_variants: bool,
+    /// Sources the user has turned off. A disabled source is never detected,
+    /// searched, stat-counted, or update-checked. Any source may be disabled,
+    /// including all of them (honest empty state, not a blocked one).
+    pub disabled_sources: Vec<SourceId>,
 }
 
 impl Default for Settings {
@@ -51,6 +59,8 @@ impl Default for Settings {
             default_search_filter_off: Vec::new(),
             default_manage_filter_off: Vec::new(),
             default_reason: ReasonFilter::default(),
+            group_variants: true,
+            disabled_sources: Vec::new(),
         }
     }
 }
@@ -156,6 +166,28 @@ mod tests {
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.default_manage_filter_off, vec!["multilib".to_string()]);
+    }
+
+    #[test]
+    fn default_group_variants_is_on_and_no_disabled_sources() {
+        let s = Settings::default();
+        assert!(s.group_variants);
+        assert!(s.disabled_sources.is_empty());
+    }
+
+    #[test]
+    fn old_settings_without_grouping_fields_load_as_defaults() {
+        let json = r#"{"show_hotkeys":true,"debounce_ms":400}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.group_variants);
+        assert!(s.disabled_sources.is_empty());
+    }
+
+    #[test]
+    fn roundtrip_keeps_disabled_sources() {
+        let s = Settings { disabled_sources: vec![SourceId::Aur], ..Default::default() };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.disabled_sources, vec![SourceId::Aur]);
     }
 
     #[test]

@@ -1,7 +1,10 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum SourceId {
     Pacman,
     Aur,
+    Flatpak,
 }
 
 impl SourceId {
@@ -9,8 +12,28 @@ impl SourceId {
         match self {
             SourceId::Pacman => "repo",
             SourceId::Aur => "aur",
+            SourceId::Flatpak => "flatpak",
         }
     }
+}
+
+/// The cross-source merge key for a name: lowercased and trimmed, with a single
+/// trailing `-bin`/`-git` removed when `strip_variants` is set. Internal spaces
+/// are preserved so multi-word display names cannot false-merge onto short repo
+/// names.
+pub fn normalize_key(name: &str, strip_variants: bool) -> String {
+    let mut s = name.trim().to_lowercase();
+    if strip_variants {
+        for suf in ["-bin", "-git"] {
+            if let Some(base) = s.strip_suffix(suf) {
+                if !base.is_empty() {
+                    s = base.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    s
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -21,6 +44,10 @@ pub struct SourceMeta {
     pub repo: Option<String>,
     /// AUR `LastModified` (unix seconds): when the package (PKGBUILD) last changed.
     pub last_modified: Option<i64>,
+    /// AppStream/Flatpak component ID when the source provides one (the Flatpak
+    /// app ID). Drives cross-source merging; `None` for pacman/AUR until they
+    /// gain AppStream readers. Case-sensitive, never normalized.
+    pub canonical_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +65,10 @@ pub struct Provider {
     pub version: String,
     pub installed: bool,
     pub installed_version: Option<String>,
+    /// This provider's own install identity: the real package name for
+    /// pacman/AUR (e.g. "gimp-bin" even when the row is keyed "gimp"), or the
+    /// Flatpak app ID. Install and detail target this, not the row name.
+    pub target: String,
     pub meta: SourceMeta,
 }
 
@@ -48,30 +79,35 @@ impl Provider {
         match self.source_id {
             SourceId::Pacman => self.meta.repo.as_deref().unwrap_or("repo"),
             SourceId::Aur => "aur",
+            SourceId::Flatpak => "flatpak",
         }
     }
 
     /// Cache key for this provider's fetched detail. Mirrors the install target:
-    /// `repo/name` for pacman, `aur:name` for the AUR. Unique per (source, repo).
-    pub fn detail_key(&self, name: &str) -> String {
+    /// `repo/target` for pacman, `aur:target` for the AUR, `flatpak:app-id` for
+    /// Flatpak. Keys on `self.target`, so a variant in a grouped row stays
+    /// distinct from the row name. Unique per (source, repo).
+    pub fn detail_key(&self, _name: &str) -> String {
         match self.source_id {
             SourceId::Pacman => match &self.meta.repo {
-                Some(repo) => format!("{repo}/{name}"),
-                None => name.to_string(),
+                Some(repo) => format!("{repo}/{}", self.target),
+                None => self.target.clone(),
             },
-            SourceId::Aur => format!("aur:{name}"),
+            SourceId::Aur => format!("aur:{}", self.target),
+            SourceId::Flatpak => format!("flatpak:{}", self.target),
         }
     }
 
-    /// The command that installs `name` specifically from THIS provider.
-    /// Pacman targets are repo-qualified (`repo/pkg`) so a non-default repo can
-    /// be chosen; the AUR goes through `aur_bin` (the resolved helper, yay/paru).
-    pub fn install_command(&self, name: &str, aur_bin: &str) -> CommandLine {
+    /// The command that installs THIS provider's target. Pacman targets are
+    /// repo-qualified (`repo/pkg`) so a non-default repo can be chosen; the AUR
+    /// goes through `aur_bin` (the resolved helper, yay/paru); Flatpak installs
+    /// the app ID from its remote (`meta.repo`), `--user` so it needs no polkit.
+    pub fn install_command(&self, _name: &str, aur_bin: &str) -> CommandLine {
         match self.source_id {
             SourceId::Pacman => {
                 let target = match &self.meta.repo {
-                    Some(repo) => format!("{repo}/{name}"),
-                    None => name.to_string(),
+                    Some(repo) => format!("{repo}/{}", self.target),
+                    None => self.target.clone(),
                 };
                 CommandLine {
                     program: "sudo".into(),
@@ -80,7 +116,16 @@ impl Provider {
             }
             SourceId::Aur => CommandLine {
                 program: aur_bin.into(),
-                args: vec!["-S".into(), name.into()],
+                args: vec!["-S".into(), self.target.clone()],
+            },
+            SourceId::Flatpak => CommandLine {
+                program: "flatpak".into(),
+                args: vec![
+                    "install".into(),
+                    "--user".into(),
+                    self.meta.repo.clone().unwrap_or_else(|| "flathub".into()),
+                    self.target.clone(),
+                ],
             },
         }
     }
@@ -339,6 +384,20 @@ pub fn upgrade_one_command(name: &str, source_id: SourceId, aur_bin: &str) -> Co
             program: aur_bin.into(),
             args: vec!["-S".into(), name.into()],
         },
+        SourceId::Flatpak => CommandLine {
+            program: "flatpak".into(),
+            args: vec!["update".into(), "--user".into(), "-y".into(), name.into()],
+        },
+    }
+}
+
+/// Command that removes a Flatpak app by ID (`flatpak uninstall --user <id>`).
+/// Kept apart from `remove_command` because Flatpak removal does not go through
+/// pacman and has no `-R` depth family.
+pub fn remove_command_flatpak(app_id: &str) -> CommandLine {
+    CommandLine {
+        program: "flatpak".into(),
+        args: vec!["uninstall".into(), "--user".into(), app_id.into()],
     }
 }
 
@@ -369,6 +428,10 @@ pub fn source_upgrade_command(source_id: SourceId, aur_bin: &str) -> CommandLine
         SourceId::Aur => CommandLine {
             program: aur_bin.into(),
             args: vec!["-Sua".into()],
+        },
+        SourceId::Flatpak => CommandLine {
+            program: "flatpak".into(),
+            args: vec!["update".into(), "--user".into(), "-y".into()],
         },
     }
 }
@@ -476,6 +539,80 @@ mod tests {
     fn source_badges() {
         assert_eq!(SourceId::Pacman.badge(), "repo");
         assert_eq!(SourceId::Aur.badge(), "aur");
+        assert_eq!(SourceId::Flatpak.badge(), "flatpak");
+    }
+
+    #[test]
+    fn normalize_key_lowercases_trims_and_strips_variants() {
+        assert_eq!(normalize_key("Firefox", false), "firefox");
+        assert_eq!(normalize_key("  GIMP  ", false), "gimp");
+        assert_eq!(normalize_key("gimp-bin", true), "gimp");
+        assert_eq!(normalize_key("gimp-git", true), "gimp");
+        assert_eq!(normalize_key("gimp-bin", false), "gimp-bin");
+        // internal spaces kept: multi-word names cannot collapse onto short names
+        assert_eq!(normalize_key("Visual Studio Code", true), "visual studio code");
+        // only one suffix, only at the end, never the whole name
+        assert_eq!(normalize_key("python-foo-git", true), "python-foo");
+        assert_eq!(normalize_key("-git", true), "-git");
+    }
+
+    #[test]
+    fn provider_installs_its_own_target_not_row_name() {
+        // A row keyed "gimp" holds an AUR provider whose real package is "gimp-bin".
+        let p = Provider {
+            source_id: SourceId::Aur,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            target: "gimp-bin".into(),
+            meta: SourceMeta::default(),
+        };
+        assert_eq!(p.install_command("gimp", "yay").args, vec!["-S", "gimp-bin"]);
+        assert_eq!(p.detail_key("gimp"), "aur:gimp-bin");
+    }
+
+    #[test]
+    fn flatpak_install_remove_and_upgrade_commands() {
+        let p = Provider {
+            source_id: SourceId::Flatpak,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            target: "org.mozilla.firefox".into(),
+            meta: SourceMeta { repo: Some("flathub".into()), ..Default::default() },
+        };
+        let c = p.install_command("Firefox", "");
+        assert_eq!(c.program, "flatpak");
+        assert_eq!(c.args, vec!["install", "--user", "flathub", "org.mozilla.firefox"]);
+        assert_eq!(p.detail_key("Firefox"), "flatpak:org.mozilla.firefox");
+        assert_eq!(
+            remove_command_flatpak("org.mozilla.firefox").args,
+            vec!["uninstall", "--user", "org.mozilla.firefox"]
+        );
+        assert_eq!(
+            source_upgrade_command(SourceId::Flatpak, "").args,
+            vec!["update", "--user", "-y"]
+        );
+        assert_eq!(
+            upgrade_one_command("org.mozilla.firefox", SourceId::Flatpak, "").args,
+            vec!["update", "--user", "-y", "org.mozilla.firefox"]
+        );
+    }
+
+    #[test]
+    fn flatpak_install_defaults_remote_to_flathub() {
+        let p = Provider {
+            source_id: SourceId::Flatpak,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            target: "org.gimp.GIMP".into(),
+            meta: SourceMeta::default(), // no repo recorded
+        };
+        assert_eq!(
+            p.install_command("GIMP", "").args,
+            vec!["install", "--user", "flathub", "org.gimp.GIMP"]
+        );
     }
 
     #[test]
@@ -507,6 +644,7 @@ mod tests {
             version: "1".into(),
             installed: false,
             installed_version: None,
+            target: "firefox".into(),
             meta: SourceMeta { repo: Some("extra".into()), ..Default::default() },
         };
         assert_eq!(pac.detail_key("firefox"), "extra/firefox");
@@ -515,6 +653,7 @@ mod tests {
             version: "1".into(),
             installed: false,
             installed_version: None,
+            target: "firefox-git".into(),
             meta: SourceMeta::default(),
         };
         assert_eq!(aur.detail_key("firefox-git"), "aur:firefox-git");
@@ -527,6 +666,7 @@ mod tests {
             version: "1".into(),
             installed: false,
             installed_version: None,
+            target: "neovim".into(),
             meta: SourceMeta {
                 repo: Some("extra-x86-64-v3".into()),
                 ..Default::default()
@@ -541,6 +681,7 @@ mod tests {
             version: "1".into(),
             installed: false,
             installed_version: None,
+            target: "tty-clock".into(),
             meta: SourceMeta::default(),
         };
         assert_eq!(aur.install_command("tty-clock", "yay").program, "yay");
@@ -667,6 +808,7 @@ mod tests {
                     version: "1".into(),
                     installed: true,
                     installed_version: Some("1".into()),
+                    target: "firefox".into(),
                     meta: SourceMeta::default(),
                 },
                 Provider {
@@ -674,6 +816,7 @@ mod tests {
                     version: "1".into(),
                     installed: false,
                     installed_version: None,
+                    target: "firefox".into(),
                     meta: SourceMeta::default(),
                 },
             ],

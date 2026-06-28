@@ -606,7 +606,7 @@ impl App {
         }
         let count = hits.len();
         self.hits_buffer.extend(hits);
-        self.rows = merge(self.hits_buffer.clone(), &self.installed);
+        self.rows = merge(self.hits_buffer.clone(), &self.installed, self.settings.group_variants);
         relevance_sort(&self.query, &mut self.rows);
         let visible = self.search_rows().len();
         if self.results_selected >= visible {
@@ -1157,7 +1157,9 @@ mod tests {
 
     #[test]
     fn applies_matching_results_and_ignores_stale() {
-        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        // Keep variants separate so this stays a test about staleness, not grouping.
+        let settings = Settings { group_variants: false, ..Settings::default() };
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], settings);
         let id = app.start_query("firefox".into());
 
         app.apply_search_results(id, SourceId::Pacman, vec![hit("firefox", SourceId::Pacman)]);
@@ -1538,6 +1540,7 @@ mod tests {
             version: "1".into(),
             installed: false,
             installed_version: None,
+            target: "pkg".into(),
             meta: SourceMeta {
                 repo: (source == SourceId::Pacman).then(|| repo.to_string()),
                 ..Default::default()

@@ -20,6 +20,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         let badge_col = match *id {
             SourceId::Pacman => pal.badge_repo,
             SourceId::Aur => pal.badge_aur,
+            SourceId::Flatpak => pal.badge_flatpak,
         };
         spans.push(Span::styled(format!("{} ", id.badge()), Style::default().fg(badge_col)));
         spans.push(Span::styled(format!("{txt}   "), Style::default().fg(col)));

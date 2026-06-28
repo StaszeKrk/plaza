@@ -81,6 +81,7 @@ pub fn parse_rpc_response(body: &str) -> anyhow::Result<Vec<PackageHit>> {
                 out_of_date: r.out_of_date.is_some(),
                 repo: None,
                 last_modified: r.last_modified,
+                canonical_id: None,
             },
         })
         .collect())

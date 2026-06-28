@@ -121,7 +121,18 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     if !rows.is_empty() {
         state.select(Some(app.installed_selected.min(rows.len() - 1)));
     }
-    frame.render_stateful_widget(list, chunks[1], &mut state);
+    // Two-pane: list left, pacman -Qi detail right. On a narrow terminal there is
+    // no room for the pane, so the list spans the full width.
+    if chunks[1].width >= 80 {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Min(0)])
+            .split(chunks[1]);
+        frame.render_stateful_widget(list, cols[0], &mut state);
+        crate::ui::manage_detail::draw(frame, app, cols[1]);
+    } else {
+        frame.render_stateful_widget(list, chunks[1], &mut state);
+    }
 }
 
 fn draw_results(frame: &mut Frame, app: &App, area: Rect) {

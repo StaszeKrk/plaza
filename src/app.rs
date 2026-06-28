@@ -179,6 +179,10 @@ pub struct App {
     /// Manage installation-reason filter (All/Explicit/Orphans). Seeded from
     /// `settings.default_reason`, cycled with `e`.
     pub manage_reason: crate::model::ReasonFilter,
+    /// Cached `pacman -Qi` detail per installed package name, with in-flight
+    /// names tracked so the same fetch is not spawned twice while scrolling.
+    pub manage_detail: HashMap<String, crate::sources::installed::PkgDetail>,
+    pub manage_detail_inflight: HashSet<String>,
     /// Repo filter (the `f` box), per view. Each `RepoFilter.off` is the set of
     /// *unchecked* repo identifiers (concrete repo names plus "aur"); empty means
     /// show all. Seeded at launch from the persisted defaults. `filter_repos` is
@@ -292,6 +296,8 @@ impl App {
             installed_selected: 0,
             manage_filter: String::new(),
             manage_reason: settings.default_reason,
+            manage_detail: HashMap::new(),
+            manage_detail_inflight: HashSet::new(),
             search_filter,
             manage_filter_repo,
             filter_repos: Vec::new(),

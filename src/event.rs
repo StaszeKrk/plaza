@@ -1,5 +1,5 @@
 use crate::model::{InstalledStats, PackageDetail, PackageHit, SourceId, UpdatesInfo};
-use crate::sources::installed::{InstalledIndex, InstalledPkg};
+use crate::sources::installed::{InstalledIndex, InstalledPkg, PkgDetail};
 use crate::sources::updates::UpdateEntry;
 
 /// Everything the render loop reacts to.
@@ -26,6 +26,9 @@ pub enum AppEvent {
     /// Extended detail for one provider, fetched lazily on opening the detail
     /// view. Keyed by `Provider::detail_key`.
     PackageDetailLoaded { key: String, detail: PackageDetail },
+    /// `pacman -Qi` detail for one installed package, fetched lazily as the Manage
+    /// selection moves. Keyed by package name.
+    ManageDetailLoaded { name: String, detail: PkgDetail },
     PtyOutput { id: u64, bytes: Vec<u8> },
     ActionFinished { id: u64, success: bool, code: u32 },
     /// Metronome tick driving theme-file live-reload (see `poll_theme_reload`).

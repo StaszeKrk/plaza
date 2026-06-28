@@ -10,6 +10,7 @@ use ratatui::Frame;
 pub mod detail;
 pub mod filter;
 pub mod main_view;
+pub mod manage_detail;
 pub mod search_bar;
 pub mod sidebar;
 pub mod status_bar;

@@ -109,6 +109,11 @@ async fn run_tui() -> anyhow::Result<()> {
             if app.should_quit {
                 break;
             }
+            // The Manage detail pane follows the selection: ensure the highlighted
+            // package's `pacman -Qi` detail is loading/cached after each event.
+            if app.active_view == ActiveView::Manage {
+                dispatch_manage_detail(&mut app, &tx);
+            }
         }
         terminal.draw(|f| ui::draw(f, &app))?;
     }
@@ -198,6 +203,10 @@ fn handle_event(
         }
         AppEvent::PackageDetailLoaded { key, detail } => {
             app.details.insert(key, detail);
+        }
+        AppEvent::ManageDetailLoaded { name, detail } => {
+            app.manage_detail_inflight.remove(&name);
+            app.manage_detail.insert(name, detail);
         }
         AppEvent::PtyOutput { id, bytes } => {
             let watching = app.focus == Focus::TaskPane && app.task_view == TaskView::Expanded;
@@ -462,6 +471,25 @@ fn dispatch_details(app: &mut App, tx: &UnboundedSender<AppEvent>) {
             }
         });
     }
+}
+
+/// Fetch `pacman -Qi` detail for the highlighted Manage package if it is not
+/// cached or already in flight. Mirrors `dispatch_details`; the result streams
+/// back via `ManageDetailLoaded` keyed by name.
+fn dispatch_manage_detail(app: &mut App, tx: &UnboundedSender<AppEvent>) {
+    let Some(pkg) = app.selected_installed() else { return };
+    let name = pkg.name;
+    if app.manage_detail.contains_key(&name) || app.manage_detail_inflight.contains(&name) {
+        return;
+    }
+    app.manage_detail_inflight.insert(name.clone());
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let out = Command::new("pacman").arg("-Qi").arg(&name).output().await;
+        let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        let detail = sources::installed::parse_pkg_detail(&text);
+        let _ = tx.send(AppEvent::ManageDetailLoaded { name, detail });
+    });
 }
 
 /// Fetch one provider's detail: `pacman -Si repo/pkg` for repos, the AUR `info`

@@ -389,8 +389,8 @@ impl App {
         &[
             ("Appearance", &[Palette, Skin, Highlight]),
             ("Search", &[SearchDelay, CollapseRepos]),
-            ("Manage", &[RemoveDepth, AurHelper, DefaultReason]),
-            ("Filters", &[HideIdleFilter]),
+            ("Manage", &[RemoveDepth, AurHelper]),
+            ("Filters", &[DefaultReason, HideIdleFilter]),
             ("General", &[ShowHotkeys]),
         ]
     }
@@ -663,6 +663,22 @@ impl App {
     }
 
     // --- Manage view: installed list ---
+
+    /// Count of dependency (non-explicit) packages with a pending update that the
+    /// Explicit reason filter hides. Surfaced as `deps: N` so a user browsing only
+    /// their apps still sees that background updates are waiting. Zero unless the
+    /// filter is Explicit.
+    pub fn dep_updates_hidden(&self) -> usize {
+        if self.manage_reason != crate::model::ReasonFilter::Explicit {
+            return 0;
+        }
+        let upd: std::collections::HashSet<&str> =
+            self.updates_list.iter().map(|u| u.name.as_str()).collect();
+        self.installed_list
+            .iter()
+            .filter(|p| !p.explicit && upd.contains(p.name.as_str()))
+            .count()
+    }
 
     /// New version available for `name`, if any (drives the `↑` marker).
     pub fn update_for(&self, name: &str) -> Option<&str> {
@@ -1258,6 +1274,35 @@ mod tests {
         assert_eq!(app.focus, Focus::List);
         app.hover_move(Dir::Up);
         assert_eq!(app.focus, Focus::Scope);
+    }
+
+    #[test]
+    fn dep_updates_hidden_counts_only_in_explicit() {
+        use crate::model::ReasonFilter;
+        let mut app = app_with_repos();
+        app.installed_list = vec![
+            InstalledPkg { name: "firefox".into(), explicit: true, ..Default::default() },
+            InstalledPkg { name: "libfoo".into(), ..Default::default() }, // dep
+            InstalledPkg { name: "libbar".into(), ..Default::default() }, // dep
+        ];
+        app.updates_list = vec![
+            UpdateEntry {
+                name: "libfoo".into(),
+                old_version: "1".into(),
+                new_version: "2".into(),
+                source_id: SourceId::Pacman,
+            },
+            UpdateEntry {
+                name: "firefox".into(),
+                old_version: "1".into(),
+                new_version: "2".into(),
+                source_id: SourceId::Pacman,
+            },
+        ];
+        app.manage_reason = ReasonFilter::All;
+        assert_eq!(app.dep_updates_hidden(), 0); // not counted unless Explicit
+        app.manage_reason = ReasonFilter::Explicit;
+        assert_eq!(app.dep_updates_hidden(), 1); // only libfoo (dep + update); firefox is explicit
     }
 
     #[test]

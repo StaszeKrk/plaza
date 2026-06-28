@@ -55,6 +55,7 @@ pub enum OptionId {
     CollapseRepos,
     RemoveDepth,
     AurHelper,
+    DefaultReason,
     HideIdleFilter,
 }
 
@@ -382,7 +383,7 @@ impl App {
         &[
             ("Appearance", &[Palette, Skin, Highlight]),
             ("Search", &[SearchDelay, CollapseRepos]),
-            ("Manage", &[RemoveDepth, AurHelper]),
+            ("Manage", &[RemoveDepth, AurHelper, DefaultReason]),
             ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
         ]
@@ -420,6 +421,7 @@ impl App {
             }
             OptionId::RemoveDepth => self.settings.remove_depth = self.settings.remove_depth.next(),
             OptionId::AurHelper => self.cycle_aur_helper(),
+            OptionId::DefaultReason => self.settings.default_reason = self.settings.default_reason.next(),
             OptionId::HideIdleFilter => {
                 self.settings.hide_idle_filter = !self.settings.hide_idle_filter
             }

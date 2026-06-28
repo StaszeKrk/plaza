@@ -297,6 +297,9 @@ fn option_row_text(app: &App, id: OptionId) -> String {
         OptionId::SearchDelay => format!("    Search delay: {}ms", app.settings.debounce_ms),
         OptionId::RemoveDepth => format!("    Remove depth: {}", app.settings.remove_depth.label()),
         OptionId::AurHelper => format!("    AUR helper: {}", aur_helper_label(app)),
+        OptionId::DefaultReason => {
+            format!("    Default Manage view: {}", app.settings.default_reason.label())
+        }
         OptionId::HideIdleFilter => {
             format!("{} Hide filter box when not in use", check(app.settings.hide_idle_filter))
         }

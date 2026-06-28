@@ -1125,6 +1125,10 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serializes the few tests that mutate the process-global `XDG_CONFIG_HOME`,
+    /// so they cannot interleave with each other under parallel test threads.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use crate::model::{CommandLine, SourceMeta};
 
     fn hit(name: &str, source: SourceId) -> PackageHit {
@@ -1196,6 +1200,7 @@ mod tests {
 
     #[test]
     fn toggle_show_hotkeys_via_id() {
+        let _env = ENV_LOCK.lock().unwrap();
         // toggle_option persists; keep it off the real ~/.config.
         let tmp = std::env::temp_dir().join(format!("plaza-opt-test-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &tmp);
@@ -1604,6 +1609,7 @@ mod tests {
     fn save_filter_default_persists_active_view_only() {
         // Redirect config writes to a temp dir so the test never touches the real
         // ~/.config. save() reads XDG_CONFIG_HOME (see config::config_base).
+        let _env = ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("plaza-test-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &tmp);
         let mut app = App::with_settings(

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # A clean machine that is not the maintainer's: catches missing deps,
+    # platform assumptions, and clippy/test breakage before a release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test (default config)
+        run: cargo test --verbose
+
+      - name: Test (hostile user config)
+        # A clean runner has default settings, so it cannot catch a test that
+        # only fails for users with non-default config (see issue #7). Point
+        # XDG_CONFIG_HOME at a deliberately non-default settings file: any test
+        # that reads the user's config instead of constructing its own will fail
+        # here, before it ever reaches someone's makepkg check().
+        run: |
+          mkdir -p "$RUNNER_TEMP/cfg/plaza"
+          cat > "$RUNNER_TEMP/cfg/plaza/settings.json" <<'JSON'
+          {
+            "show_hotkeys": false,
+            "collapse_repos": true,
+            "debounce_ms": 123,
+            "remove_depth": "Purge",
+            "aur_helper": "Paru",
+            "hide_idle_filter": false,
+            "palette": "nord",
+            "skin": "sharp",
+            "highlight": "Both",
+            "default_search_filter_off": ["extra"],
+            "default_manage_filter_off": ["aur"],
+            "default_reason": "Explicit"
+          }
+          JSON
+          XDG_CONFIG_HOME="$RUNNER_TEMP/cfg" cargo test --verbose

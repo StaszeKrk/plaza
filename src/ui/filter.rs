@@ -17,14 +17,14 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, row)| {
-            let cursor = if i == app.filter_selected && active {
+            let cursor = if i == app.active_filter().selected && active {
                 crate::ui::cursor_symbol(app)
             } else {
                 "  ".to_string()
             };
             let check = if row.checked { "[x]" } else { "[ ]" };
             let indent = if matches!(row.id, FilterId::Repo(_)) { "  " } else { "" };
-            let style = if i == app.filter_selected && active {
+            let style = if i == app.active_filter().selected && active {
                 crate::ui::highlight_style(app)
             } else {
                 Style::default().fg(pal.fg)

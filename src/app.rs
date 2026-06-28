@@ -43,6 +43,15 @@ pub struct FilterRow {
     pub id: FilterId,
 }
 
+/// Per-view repo-filter state: the unchecked repo ids and the box cursor. Search
+/// and Manage each keep their own, so a repo hidden in one view is unaffected in
+/// the other. The box (`f`) always edits the active view's instance.
+#[derive(Debug, Default, Clone)]
+pub struct RepoFilter {
+    pub off: BTreeSet<String>,
+    pub selected: usize,
+}
+
 /// Hover-movement direction (navigate mode).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dir {
@@ -151,13 +160,14 @@ pub struct App {
     /// Manage-view filter text. Kept separate from `query` so each tab keeps its
     /// own search box contents.
     pub manage_filter: String,
-    /// Repo filter (the `f` box). `repo_filter_off` is the set of *unchecked*
-    /// repo identifiers (concrete repo names plus "aur"); empty means show all.
-    /// Session-only, not persisted. `filter_repos` is the stable, ordered list of
-    /// pacman repos (from `pacman -Sl`) that populate the checkbox rows.
-    pub repo_filter_off: BTreeSet<String>,
+    /// Repo filter (the `f` box), per view. Each `RepoFilter.off` is the set of
+    /// *unchecked* repo identifiers (concrete repo names plus "aur"); empty means
+    /// show all. Seeded at launch from the persisted defaults. `filter_repos` is
+    /// the stable, ordered list of pacman repos (from `pacman -Sl`) shared by both
+    /// views' checkbox rows.
+    pub search_filter: RepoFilter,
+    pub manage_filter_repo: RepoFilter,
     pub filter_repos: Vec<String>,
-    pub filter_selected: usize,
     /// Upgradable packages (repos + AUR); drives the scope chips and `↑` markers.
     pub updates_list: Vec<UpdateEntry>,
     /// Selected upgrade-scope chip: 0 = All, 1..=n = the nth present source.
@@ -215,11 +225,23 @@ fn file_mtime_opt(path: Option<std::path::PathBuf>) -> Option<SystemTime> {
 
 impl App {
     pub fn new(source_ids: Vec<SourceId>) -> Self {
+        Self::with_settings(source_ids, Settings::load())
+    }
+
+    /// Build the app with explicit settings (so tests can inject defaults).
+    pub fn with_settings(source_ids: Vec<SourceId>, settings: Settings) -> Self {
         let source_status = source_ids
             .into_iter()
             .map(|id| (id, SourceState::Done(0)))
             .collect();
-        let settings = Settings::load();
+        let search_filter = RepoFilter {
+            off: settings.default_search_filter_off.iter().cloned().collect(),
+            selected: 0,
+        };
+        let manage_filter_repo = RepoFilter {
+            off: settings.default_manage_filter_off.iter().cloned().collect(),
+            selected: 0,
+        };
         let base = crate::config::config_base();
         let pal_dir = base.as_ref().map(|b| b.join("plaza").join("palettes"));
         let skn_dir = base.as_ref().map(|b| b.join("plaza").join("skins"));
@@ -250,9 +272,9 @@ impl App {
             installed_list: Vec::new(),
             installed_selected: 0,
             manage_filter: String::new(),
-            repo_filter_off: BTreeSet::new(),
+            search_filter,
+            manage_filter_repo,
             filter_repos: Vec::new(),
-            filter_selected: 0,
             updates_list: Vec::new(),
             upgrade_scope_selected: 0,
             interacting: true,
@@ -616,7 +638,7 @@ impl App {
             .installed_list
             .iter()
             .filter(|p| q.is_empty() || p.name.to_ascii_lowercase().contains(&q))
-            .filter(|p| self.repo_shown(&p.origin))
+            .filter(|p| !self.manage_filter_repo.off.contains(&p.origin))
             .collect();
         rows.sort_by(|a, b| {
             let (au, bu) = (updates.contains(a.name.as_str()), updates.contains(b.name.as_str()));
@@ -655,9 +677,27 @@ impl App {
 
     // --- repo filter (the `f` box) ---
 
-    /// Whether packages from `repo` (a concrete repo name or "aur") are shown.
+    /// The repo filter for the active view (Manage vs Search). The box edits and
+    /// renders this one.
+    pub fn active_filter(&self) -> &RepoFilter {
+        match self.active_view {
+            ActiveView::Manage => &self.manage_filter_repo,
+            _ => &self.search_filter,
+        }
+    }
+
+    pub fn active_filter_mut(&mut self) -> &mut RepoFilter {
+        match self.active_view {
+            ActiveView::Manage => &mut self.manage_filter_repo,
+            _ => &mut self.search_filter,
+        }
+    }
+
+    /// Whether `repo` (a concrete repo name or "aur") is shown in the active
+    /// view's filter. Box rendering (checkboxes, master) reads this; the result
+    /// and Manage lists key on their own view's set directly.
     pub fn repo_shown(&self, repo: &str) -> bool {
-        !self.repo_filter_off.contains(repo)
+        !self.active_filter().off.contains(repo)
     }
 
     /// With the hide-when-idle option off, the box is always on screen. With it
@@ -666,7 +706,7 @@ impl App {
     pub fn filter_box_visible(&self) -> bool {
         !self.settings.hide_idle_filter
             || self.focus == Focus::Filter
-            || !self.repo_filter_off.is_empty()
+            || !self.active_filter().off.is_empty()
     }
 
     /// True when no pacman repo is filtered out (drives the master checkbox).
@@ -709,10 +749,11 @@ impl App {
         rows
     }
 
-    /// Flip one identifier in/out of the unchecked set.
+    /// Flip one identifier in/out of the active view's unchecked set.
     fn toggle_repo_off(&mut self, id: &str) {
-        if !self.repo_filter_off.remove(id) {
-            self.repo_filter_off.insert(id.to_string());
+        let off = &mut self.active_filter_mut().off;
+        if !off.remove(id) {
+            off.insert(id.to_string());
         }
     }
 
@@ -720,17 +761,19 @@ impl App {
     /// together; a repo or `aur` row flips just itself. Re-clamps both list
     /// selections, since the visible rows may shrink.
     pub fn toggle_filter(&mut self) {
-        let Some(row) = self.filter_checkboxes().get(self.filter_selected).cloned() else {
+        let Some(row) = self.filter_checkboxes().get(self.active_filter().selected).cloned() else {
             return;
         };
         match row.id {
             FilterId::Master => {
                 let repos = self.filter_repos.clone();
-                if self.pacman_master_checked() {
-                    self.repo_filter_off.extend(repos);
+                let checked = self.pacman_master_checked();
+                let off = &mut self.active_filter_mut().off;
+                if checked {
+                    off.extend(repos);
                 } else {
                     for r in &repos {
-                        self.repo_filter_off.remove(r);
+                        off.remove(r);
                     }
                 }
             }
@@ -742,14 +785,18 @@ impl App {
 
     /// Move the filter-box cursor, clamped to the rendered rows.
     pub fn move_filter(&mut self, delta: i32) {
-        self.filter_selected = clamp_index(self.filter_selected, delta, self.filter_checkboxes().len());
+        let len = self.filter_checkboxes().len();
+        let cur = self.active_filter().selected;
+        self.active_filter_mut().selected = clamp_index(cur, delta, len);
     }
 
     /// Open the filter box and focus it (the `f` key).
     pub fn open_filter(&mut self) {
         self.focus = Focus::Filter;
         self.interacting = true;
-        self.filter_selected = self.filter_selected.min(self.filter_checkboxes().len().saturating_sub(1));
+        let max = self.filter_checkboxes().len().saturating_sub(1);
+        let cur = self.active_filter().selected;
+        self.active_filter_mut().selected = cur.min(max);
     }
 
     /// Close the filter box: move focus back to the content area. It stays
@@ -782,7 +829,11 @@ impl App {
     pub fn search_rows(&self) -> Vec<&PackageRow> {
         self.rows
             .iter()
-            .filter(|row| row.providers.iter().any(|p| self.repo_shown(p.badge())))
+            .filter(|row| {
+                row.providers
+                    .iter()
+                    .any(|p| !self.search_filter.off.contains(p.badge()))
+            })
             .collect()
     }
 
@@ -1378,18 +1429,43 @@ mod tests {
     fn repo_shown_reflects_off_set() {
         let mut app = app_with_repos();
         assert!(app.repo_shown("extra"));
-        app.repo_filter_off.insert("extra".into());
+        app.search_filter.off.insert("extra".into());
         assert!(!app.repo_shown("extra"));
         assert!(app.repo_shown("world"));
     }
 
     #[test]
+    fn active_filter_follows_view() {
+        let mut app = app_with_repos();
+        app.active_view = ActiveView::Search;
+        app.active_filter_mut().off.insert("extra".into());
+        assert!(app.active_filter().off.contains("extra"));
+        app.active_view = ActiveView::Manage;
+        assert!(app.active_filter().off.is_empty());
+    }
+
+    #[test]
+    fn per_view_filters_are_independent() {
+        let mut app = app_with_repos();
+        app.rows = vec![row_with("b", vec![prov(SourceId::Pacman, "multilib")])];
+        app.installed_list = vec![InstalledPkg {
+            name: "b".into(),
+            version: "1".into(),
+            origin: "multilib".into(),
+        }];
+        // Hide multilib in Search only.
+        app.search_filter.off.insert("multilib".into());
+        assert!(app.search_rows().is_empty()); // search hides it
+        assert_eq!(app.manage_rows().len(), 1); // manage unaffected
+    }
+
+    #[test]
     fn toggle_master_fills_and_clears_pacman_repos_only() {
         let mut app = app_with_repos();
-        app.repo_filter_off.insert("aur".into()); // aur off, must stay untouched
+        app.search_filter.off.insert("aur".into()); // aur off, must stay untouched
         // master is row 0; checked initially (no repo off)
         assert!(app.pacman_master_checked());
-        app.filter_selected = 0;
+        app.search_filter.selected = 0;
         app.toggle_filter(); // uncheck master -> all pacman repos off
         assert!(!app.repo_shown("extra"));
         assert!(!app.repo_shown("world"));
@@ -1406,11 +1482,11 @@ mod tests {
     fn toggle_single_repo_and_aur() {
         let mut app = app_with_repos();
         // rows: [all repos, extra, world, multilib, aur]
-        app.filter_selected = 1; // extra
+        app.search_filter.selected = 1; // extra
         app.toggle_filter();
         assert!(!app.repo_shown("extra"));
         assert!(!app.pacman_master_checked()); // one repo off
-        app.filter_selected = 4; // aur
+        app.search_filter.selected = 4; // aur
         app.toggle_filter();
         assert!(!app.repo_shown("aur"));
     }
@@ -1436,10 +1512,10 @@ mod tests {
             // multi-provider: shown while any provider's repo is shown
             row_with("c", vec![prov(SourceId::Pacman, "multilib"), prov(SourceId::Aur, "")]),
         ];
-        app.repo_filter_off.insert("multilib".into());
+        app.search_filter.off.insert("multilib".into());
         let names: Vec<&str> = app.search_rows().iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["a", "c"]); // b dropped; c kept via its aur provider
-        app.repo_filter_off.insert("aur".into());
+        app.search_filter.off.insert("aur".into());
         let names: Vec<&str> = app.search_rows().iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["a"]); // now c's providers are all off
     }
@@ -1451,7 +1527,7 @@ mod tests {
             InstalledPkg { name: "a".into(), version: "1".into(), origin: "extra".into() },
             InstalledPkg { name: "b".into(), version: "1".into(), origin: "aur".into() },
         ];
-        app.repo_filter_off.insert("aur".into());
+        app.manage_filter_repo.off.insert("aur".into());
         let names: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["a"]);
     }
@@ -1464,7 +1540,7 @@ mod tests {
             row_with("b", vec![prov(SourceId::Pacman, "multilib")]),
         ];
         app.results_selected = 1; // on "b"
-        app.filter_selected = 3; // multilib
+        app.search_filter.selected = 3; // multilib
         app.toggle_filter(); // hides "b"
         assert_eq!(app.search_rows().len(), 1);
         assert_eq!(app.results_selected, 0); // clamped
@@ -1483,7 +1559,7 @@ mod tests {
         app.focus = Focus::Filter;
         assert!(app.filter_box_visible()); // focused (open or hovered)
         app.focus = Focus::Search;
-        app.repo_filter_off.insert("extra".into());
+        app.search_filter.off.insert("extra".into());
         assert!(app.filter_box_visible()); // active filter keeps it up
     }
 

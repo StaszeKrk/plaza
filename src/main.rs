@@ -95,8 +95,19 @@ async fn run_tui() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
     spawn_input_task(tx.clone());
-    spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone());
+    spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone(), app.present_sources().contains(&SourceId::Flatpak));
     spawn_theme_tick(tx.clone());
+    // Warm the Flatpak AppStream cache in the background so a cold cache does not
+    // make searches look empty. Best-effort; never blocks the UI.
+    if app.present_sources().contains(&SourceId::Flatpak) {
+        tokio::spawn(async move {
+            let _ = Command::new("flatpak")
+                .env("LC_ALL", "C")
+                .args(["--user", "update", "--appstream"])
+                .output()
+                .await;
+        });
+    }
 
     terminal.draw(|f| ui::draw(f, &app))?;
     while let Some(ev) = rx.recv().await {
@@ -243,7 +254,7 @@ fn handle_event(
             if matched {
                 app.needs_input = false;
                 // Refresh stats + installed index after each action completes.
-                spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone());
+                spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone(), app.present_sources().contains(&SourceId::Flatpak));
                 if success && !app.queue.is_empty() {
                     // Auto-advance: drop the finished task and start the next item.
                     // Do not surface; keep the user wherever they currently are.
@@ -310,7 +321,7 @@ fn start_next(app: &mut App, tx: &UnboundedSender<AppEvent>, surface: bool) {
     }
 }
 
-fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>) {
+fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, flatpak: bool) {
     // installed counts + index
     let tx_inst = tx.clone();
     tokio::spawn(async move {
@@ -348,7 +359,7 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>) 
         let _ = tx_list.send(AppEvent::InstalledList(list, ordered));
     });
 
-    // best-effort update counts + list (repos and AUR)
+    // best-effort update counts + list (repos, AUR, and Flatpak)
     tokio::spawn(async move {
         let repo_text = repo_update_text().await;
         let aur_text = aur_update_text(aur_helper).await;
@@ -364,6 +375,26 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>) 
         }
         if let Some(t) = &aur_text {
             list.extend(sources::updates::parse_update_list(t, SourceId::Aur));
+        }
+        // Flatpak updates: `remote-ls --updates` reports the upgradable app IDs
+        // (no versions), so the entries carry empty version strings. This call
+        // reaches the network; it runs here in the background like the others.
+        if flatpak {
+            if let Ok(out) = Command::new("flatpak")
+                .env("LC_ALL", "C")
+                .args(["remote-ls", "--user", "--app", "--updates"])
+                .output()
+                .await
+            {
+                for name in sources::flatpak::parse_updates(&String::from_utf8_lossy(&out.stdout)) {
+                    list.push(sources::updates::UpdateEntry {
+                        name,
+                        old_version: String::new(),
+                        new_version: String::new(),
+                        source_id: SourceId::Flatpak,
+                    });
+                }
+            }
         }
         let _ = tx.send(AppEvent::UpdatesList(list));
     });
@@ -584,7 +615,7 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
         app.toggle_view();
         if app.active_view == ActiveView::Manage {
-            spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone());
+            spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone(), app.present_sources().contains(&SourceId::Flatpak));
         }
         return;
     }
@@ -829,7 +860,7 @@ fn interact_sidebar(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>
             app.interacting = false;
             app.focus = app.content_landing();
             if app.active_view == ActiveView::Manage {
-                spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone()); // refresh installed + updates
+                spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone(), app.present_sources().contains(&SourceId::Flatpak)); // refresh installed + updates
             }
         }
         KeyCode::Esc => app.interacting = false,

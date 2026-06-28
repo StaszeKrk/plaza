@@ -289,6 +289,9 @@ fn option_row_text(app: &App, id: OptionId) -> String {
         OptionId::CollapseRepos => {
             format!("{} Group repos as [official]", check(app.settings.collapse_repos))
         }
+        OptionId::GroupVariants => {
+            format!("{} Group name variants and Flatpak", check(app.settings.group_variants))
+        }
         OptionId::Palette => format!("    Palette: {}", app.settings.palette),
         OptionId::Skin => format!("    Skin: {}", app.settings.skin),
         OptionId::Highlight => {

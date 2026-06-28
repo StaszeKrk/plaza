@@ -56,6 +56,7 @@ pub enum OptionId {
     Highlight,
     SearchDelay,
     CollapseRepos,
+    GroupVariants,
     RemoveDepth,
     AurHelper,
     HideIdleFilter,
@@ -390,7 +391,7 @@ impl App {
         use OptionId::*;
         &[
             ("Appearance", &[Palette, Skin, Highlight]),
-            ("Search", &[SearchDelay, CollapseRepos]),
+            ("Search", &[SearchDelay, CollapseRepos, GroupVariants]),
             ("Manage", &[RemoveDepth, AurHelper]),
             ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
@@ -421,6 +422,7 @@ impl App {
         match self.selected_option() {
             OptionId::ShowHotkeys => self.settings.show_hotkeys = !self.settings.show_hotkeys,
             OptionId::CollapseRepos => self.settings.collapse_repos = !self.settings.collapse_repos,
+            OptionId::GroupVariants => self.settings.group_variants = !self.settings.group_variants,
             OptionId::Palette => self.cycle_palette(),
             OptionId::Skin => self.cycle_skin(),
             OptionId::Highlight => self.settings.highlight = self.settings.highlight.next(),

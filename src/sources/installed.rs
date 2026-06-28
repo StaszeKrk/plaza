@@ -33,13 +33,26 @@ pub fn count_lines(output: &str) -> usize {
     output.lines().filter(|l| !l.trim().is_empty()).count()
 }
 
-/// One installed package: name, version, and where it came from (a repo name
-/// like "extra" or "aur" for foreign packages).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One installed package: name, version, where it came from (a repo name like
+/// "extra" or "aur" for foreign packages), and installation-reason flags.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct InstalledPkg {
     pub name: String,
     pub version: String,
     pub origin: String,
+    /// In `pacman -Qe`: the user installed this on purpose.
+    pub explicit: bool,
+    /// In `pacman -Qdt`: a dependency nothing requires anymore (an orphan).
+    pub orphan: bool,
+}
+
+/// Parse a quiet name-per-line listing (`pacman -Qeq` / `-Qdtq`) into a set.
+pub fn name_set(output: &str) -> std::collections::HashSet<String> {
+    output
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Build a `name -> repo` map from `pacman -Sl` output (`repo name version
@@ -77,6 +90,8 @@ pub fn parse_installed_list(
     native: &str,
     foreign: &str,
     repos: &HashMap<String, String>,
+    explicit: &std::collections::HashSet<String>,
+    orphan: &std::collections::HashSet<String>,
 ) -> Vec<InstalledPkg> {
     let parse = |output: &str, foreign: bool| -> Vec<InstalledPkg> {
         output
@@ -90,7 +105,13 @@ pub fn parse_installed_list(
                 } else {
                     repos.get(name).cloned().unwrap_or_else(|| "repo".to_string())
                 };
-                Some(InstalledPkg { name: name.to_string(), version, origin })
+                Some(InstalledPkg {
+                    explicit: explicit.contains(name),
+                    orphan: orphan.contains(name),
+                    name: name.to_string(),
+                    version,
+                    origin,
+                })
             })
             .collect()
     };
@@ -143,7 +164,8 @@ mod tests {
         let foreign = "yay 12.4.0-1\n";
         let mut repos = HashMap::new();
         repos.insert("firefox".to_string(), "extra".to_string());
-        let list = parse_installed_list(native, foreign, &repos);
+        let none = std::collections::HashSet::new();
+        let list = parse_installed_list(native, foreign, &repos, &none, &none);
         assert_eq!(list.len(), 3);
         // sorted by name: firefox, neovim, yay
         assert_eq!(list[0].name, "firefox");
@@ -152,6 +174,26 @@ mod tests {
         assert_eq!(list[1].origin, "repo"); // unknown repo falls back
         assert_eq!(list[2].name, "yay");
         assert_eq!(list[2].origin, "aur"); // foreign
-        assert!(parse_installed_list("", "", &repos).is_empty());
+        assert!(parse_installed_list("", "", &repos, &none, &none).is_empty());
+    }
+
+    #[test]
+    fn flags_explicit_and_orphan_from_sets() {
+        let native = "firefox 141.0-1\nlibfoo 1.0-1\nldb 2.0-1\n";
+        let repos = HashMap::new();
+        let explicit = name_set("firefox\n");
+        let orphan = name_set("ldb\n");
+        let list = parse_installed_list(native, "", &repos, &explicit, &orphan);
+        let by = |n: &str| list.iter().find(|p| p.name == n).unwrap().clone();
+        assert!(by("firefox").explicit && !by("firefox").orphan);
+        assert!(by("ldb").orphan && !by("ldb").explicit);
+        assert!(!by("libfoo").explicit && !by("libfoo").orphan);
+    }
+
+    #[test]
+    fn name_set_collects_names() {
+        let s = name_set("a 1.0\nb\n\n c\n");
+        assert!(s.contains("a") && s.contains("b") && s.contains("c"));
+        assert_eq!(s.len(), 3);
     }
 }

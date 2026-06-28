@@ -1106,7 +1106,7 @@ mod tests {
     }
 
     fn ipkg(name: &str) -> InstalledPkg {
-        InstalledPkg { name: name.into(), version: "1".into(), origin: "repo".into() }
+        InstalledPkg { name: name.into(), version: "1".into(), origin: "repo".into(), ..Default::default() }
     }
 
     #[test]
@@ -1577,6 +1577,7 @@ mod tests {
             name: "b".into(),
             version: "1".into(),
             origin: "multilib".into(),
+            ..Default::default()
         }];
         // Hide multilib in Search only.
         app.search_filter.off.insert("multilib".into());
@@ -1649,8 +1650,8 @@ mod tests {
     fn manage_rows_drops_filtered_origins() {
         let mut app = app_with_repos();
         app.installed_list = vec![
-            InstalledPkg { name: "a".into(), version: "1".into(), origin: "extra".into() },
-            InstalledPkg { name: "b".into(), version: "1".into(), origin: "aur".into() },
+            InstalledPkg { name: "a".into(), version: "1".into(), origin: "extra".into(), ..Default::default() },
+            InstalledPkg { name: "b".into(), version: "1".into(), origin: "aur".into(), ..Default::default() },
         ];
         app.manage_filter_repo.off.insert("aur".into());
         let names: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();

@@ -326,8 +326,15 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>) 
         let foreign = text(Command::new("pacman").arg("-Qm").output().await);
         let sl = text(Command::new("pacman").arg("-Sl").output().await);
         let repos = sources::installed::parse_sync_repos(&sl);
+        let explicit = sources::installed::name_set(
+            &text(Command::new("pacman").arg("-Qeq").output().await),
+        );
+        let orphan = sources::installed::name_set(
+            &text(Command::new("pacman").arg("-Qdtq").output().await),
+        );
         let ordered = sources::installed::ordered_repos(&sl);
-        let list = sources::installed::parse_installed_list(&native, &foreign, &repos);
+        let list =
+            sources::installed::parse_installed_list(&native, &foreign, &repos, &explicit, &orphan);
         let _ = tx_list.send(AppEvent::InstalledList(list, ordered));
     });
 

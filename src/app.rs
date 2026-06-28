@@ -34,6 +34,8 @@ pub enum FilterId {
     Repo(String),
     /// The AUR.
     Aur,
+    /// Flatpak.
+    Flatpak,
     /// A Manage installation-reason choice (radio: All/Explicit/Orphans). Shown in
     /// the filter box only in the Manage view.
     Reason(crate::model::ReasonFilter),
@@ -809,6 +811,13 @@ impl App {
                 id: FilterId::Aur,
             });
         }
+        if self.present_sources().contains(&SourceId::Flatpak) {
+            rows.push(FilterRow {
+                label: "flatpak".into(),
+                checked: self.repo_shown("flatpak"),
+                id: FilterId::Flatpak,
+            });
+        }
         // Reason rows (radio) live in the Manage view only.
         if self.active_view == ActiveView::Manage {
             use crate::model::ReasonFilter::*;
@@ -853,6 +862,7 @@ impl App {
             }
             FilterId::Repo(r) => self.toggle_repo_off(&r),
             FilterId::Aur => self.toggle_repo_off("aur"),
+            FilterId::Flatpak => self.toggle_repo_off("flatpak"),
             FilterId::Reason(r) => self.manage_reason = r, // radio: select
         }
         self.clamp_after_filter();

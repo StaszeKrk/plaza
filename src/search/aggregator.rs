@@ -130,13 +130,34 @@ fn source_order(id: SourceId) -> u8 {
     }
 }
 
+/// A row's relevance rank: the best (lowest) rank across its display name and
+/// every provider's target. This lifts a Flatpak row whose human-name label does
+/// not contain the query but whose app ID does (search "gimp" still surfaces
+/// `org.gimp.GIMP`, labeled "GNU Image Manipulation Program").
+pub fn row_rank(q: &str, row: &PackageRow) -> u8 {
+    let mut best = rank(q, &row.name);
+    for p in &row.providers {
+        if best == 0 {
+            break;
+        }
+        best = best.min(rank(q, &p.target));
+        // For a reverse-DNS target (a Flatpak app ID), also rank on the last
+        // segment, so "gimp" is an exact match on org.gimp.GIMP's "GIMP" tail and
+        // the app sorts near the top instead of by its long human-name label.
+        if let Some(tail) = p.target.rsplit('.').next() {
+            best = best.min(rank(q, tail));
+        }
+    }
+    best
+}
+
 /// Sort rows by relevance to `query`: exact > prefix > substring, then shorter
 /// name, then alphabetical. Total + deterministic.
 pub fn relevance_sort(query: &str, rows: &mut [PackageRow]) {
     let q = query.to_lowercase();
     rows.sort_by(|a, b| {
-        rank(&q, &a.name)
-            .cmp(&rank(&q, &b.name))
+        row_rank(&q, a)
+            .cmp(&row_rank(&q, b))
             .then_with(|| a.name.len().cmp(&b.name.len()))
             .then_with(|| a.name.cmp(&b.name))
     });
@@ -325,6 +346,20 @@ mod tests {
         assert_eq!(match_range("snappy", "na"), Some((1, 3)));
         assert_eq!(match_range("firefox", "zzz"), None);
         assert_eq!(match_range("firefox", ""), None);
+    }
+
+    #[test]
+    fn flatpak_row_ranks_on_app_id_not_just_human_name() {
+        let inst = InstalledIndex::default();
+        // A Flatpak labeled by a human name that does not contain the query, but
+        // whose app ID does, must outrank a pure non-match.
+        let hits = vec![
+            fhit("zzz-unrelated", SourceId::Aur, None),
+            fhit("GNU Image Manipulation Program", SourceId::Flatpak, Some("org.gimp.GIMP")),
+        ];
+        let mut rows = merge(hits, &inst, true);
+        relevance_sort("gimp", &mut rows);
+        assert_eq!(rows[0].name, "GNU Image Manipulation Program");
     }
 
     #[test]

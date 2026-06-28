@@ -1221,6 +1221,9 @@ mod tests {
     #[test]
     fn cycle_aur_helper_recomputes_binary() {
         let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        // App::new loads the real user config; pin the setting so the test does
+        // not depend on the build machine's ~/.config/plaza/settings.json.
+        app.settings.aur_helper = crate::model::AurHelper::Auto;
         app.helpers_available = (true, true); // both installed
         app.recompute_aur_helper();
         // Auto prefers paru.

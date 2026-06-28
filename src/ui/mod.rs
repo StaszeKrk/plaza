@@ -284,9 +284,7 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
 fn option_row_text(app: &App, id: OptionId) -> String {
     let check = |b: bool| if b { "[x]" } else { "[ ]" };
     match id {
-        OptionId::ShowHotkeys => {
-            format!("{} Show hotkeys in status bar", check(app.settings.show_hotkeys))
-        }
+        OptionId::ShowHotkeys => format!("{} Show hotkey hints", check(app.settings.show_hotkeys)),
         OptionId::CollapseRepos => {
             format!("{} Group repos as [official]", check(app.settings.collapse_repos))
         }
@@ -298,9 +296,6 @@ fn option_row_text(app: &App, id: OptionId) -> String {
         OptionId::SearchDelay => format!("    Search delay: {}ms", app.settings.debounce_ms),
         OptionId::RemoveDepth => format!("    Remove depth: {}", app.settings.remove_depth.label()),
         OptionId::AurHelper => format!("    AUR helper: {}", aur_helper_label(app)),
-        OptionId::DefaultReason => {
-            format!("    Default Manage view: {}", app.settings.default_reason.label())
-        }
         OptionId::HideIdleFilter => {
             format!("{} Hide filter box when not in use", check(app.settings.hide_idle_filter))
         }

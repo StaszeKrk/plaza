@@ -34,6 +34,9 @@ pub enum FilterId {
     Repo(String),
     /// The AUR.
     Aur,
+    /// A Manage installation-reason choice (radio: All/Explicit/Orphans). Shown in
+    /// the filter box only in the Manage view.
+    Reason(crate::model::ReasonFilter),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +58,6 @@ pub enum OptionId {
     CollapseRepos,
     RemoveDepth,
     AurHelper,
-    DefaultReason,
     HideIdleFilter,
 }
 
@@ -390,7 +392,7 @@ impl App {
             ("Appearance", &[Palette, Skin, Highlight]),
             ("Search", &[SearchDelay, CollapseRepos]),
             ("Manage", &[RemoveDepth, AurHelper]),
-            ("Filters", &[DefaultReason, HideIdleFilter]),
+            ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
         ]
     }
@@ -427,7 +429,6 @@ impl App {
             }
             OptionId::RemoveDepth => self.settings.remove_depth = self.settings.remove_depth.next(),
             OptionId::AurHelper => self.cycle_aur_helper(),
-            OptionId::DefaultReason => self.settings.default_reason = self.settings.default_reason.next(),
             OptionId::HideIdleFilter => {
                 self.settings.hide_idle_filter = !self.settings.hide_idle_filter
             }
@@ -664,22 +665,6 @@ impl App {
 
     // --- Manage view: installed list ---
 
-    /// Count of dependency (non-explicit) packages with a pending update that the
-    /// Explicit reason filter hides. Surfaced as `deps: N` so a user browsing only
-    /// their apps still sees that background updates are waiting. Zero unless the
-    /// filter is Explicit.
-    pub fn dep_updates_hidden(&self) -> usize {
-        if self.manage_reason != crate::model::ReasonFilter::Explicit {
-            return 0;
-        }
-        let upd: std::collections::HashSet<&str> =
-            self.updates_list.iter().map(|u| u.name.as_str()).collect();
-        self.installed_list
-            .iter()
-            .filter(|p| !p.explicit && upd.contains(p.name.as_str()))
-            .count()
-    }
-
     /// New version available for `name`, if any (drives the `↑` marker).
     pub fn update_for(&self, name: &str) -> Option<&str> {
         self.updates_list
@@ -750,12 +735,6 @@ impl App {
         self.installed_selected = self.installed_selected.min(n.saturating_sub(1));
     }
 
-    /// Advance the Manage reason filter (All -> Explicit -> Orphans), re-clamping
-    /// the selection since the visible rows change.
-    pub fn cycle_reason(&mut self) {
-        self.manage_reason = self.manage_reason.next();
-        self.clamp_installed();
-    }
 
     // --- repo filter (the `f` box) ---
 
@@ -828,6 +807,17 @@ impl App {
                 id: FilterId::Aur,
             });
         }
+        // Reason rows (radio) live in the Manage view only.
+        if self.active_view == ActiveView::Manage {
+            use crate::model::ReasonFilter::*;
+            for r in [All, Explicit, Orphans] {
+                rows.push(FilterRow {
+                    label: r.label().to_string(),
+                    checked: self.manage_reason == r,
+                    id: FilterId::Reason(r),
+                });
+            }
+        }
         rows
     }
 
@@ -861,6 +851,7 @@ impl App {
             }
             FilterId::Repo(r) => self.toggle_repo_off(&r),
             FilterId::Aur => self.toggle_repo_off("aur"),
+            FilterId::Reason(r) => self.manage_reason = r, // radio: select
         }
         self.clamp_after_filter();
     }
@@ -880,6 +871,7 @@ impl App {
         let which = match self.active_view {
             ActiveView::Manage => {
                 self.settings.default_manage_filter_off = off;
+                self.settings.default_reason = self.manage_reason;
                 "Manage"
             }
             _ => {
@@ -1277,35 +1269,6 @@ mod tests {
     }
 
     #[test]
-    fn dep_updates_hidden_counts_only_in_explicit() {
-        use crate::model::ReasonFilter;
-        let mut app = app_with_repos();
-        app.installed_list = vec![
-            InstalledPkg { name: "firefox".into(), explicit: true, ..Default::default() },
-            InstalledPkg { name: "libfoo".into(), ..Default::default() }, // dep
-            InstalledPkg { name: "libbar".into(), ..Default::default() }, // dep
-        ];
-        app.updates_list = vec![
-            UpdateEntry {
-                name: "libfoo".into(),
-                old_version: "1".into(),
-                new_version: "2".into(),
-                source_id: SourceId::Pacman,
-            },
-            UpdateEntry {
-                name: "firefox".into(),
-                old_version: "1".into(),
-                new_version: "2".into(),
-                source_id: SourceId::Pacman,
-            },
-        ];
-        app.manage_reason = ReasonFilter::All;
-        assert_eq!(app.dep_updates_hidden(), 0); // not counted unless Explicit
-        app.manage_reason = ReasonFilter::Explicit;
-        assert_eq!(app.dep_updates_hidden(), 1); // only libfoo (dep + update); firefox is explicit
-    }
-
-    #[test]
     fn manage_rows_filter_and_float_updates() {
         let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
         app.installed_list = vec![ipkg("alpha"), ipkg("firefox"), ipkg("firewalld"), ipkg("zoxide")];
@@ -1616,17 +1579,25 @@ mod tests {
     }
 
     #[test]
-    fn cycle_reason_advances_and_clamps() {
+    fn selecting_reason_row_sets_filter_and_clamps() {
         use crate::model::ReasonFilter;
         let mut app = app_with_repos();
+        app.active_view = ActiveView::Manage;
         app.installed_list = vec![
             InstalledPkg { name: "firefox".into(), explicit: true, ..Default::default() },
             InstalledPkg { name: "ldb".into(), orphan: true, ..Default::default() },
         ];
         app.installed_selected = 1;
-        app.cycle_reason(); // -> Explicit, only firefox remains
+        // find and select the "explicit" reason row in the filter box
+        let rows = app.filter_checkboxes();
+        let idx = rows
+            .iter()
+            .position(|r| r.id == FilterId::Reason(ReasonFilter::Explicit))
+            .unwrap();
+        app.manage_filter_repo.selected = idx;
+        app.toggle_filter();
         assert_eq!(app.manage_reason, ReasonFilter::Explicit);
-        assert_eq!(app.installed_selected, 0); // clamped
+        assert_eq!(app.installed_selected, 0); // clamped after rows shrank
     }
 
     #[test]

@@ -13,28 +13,34 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let pal = &app.palette;
 
     let rows = app.filter_checkboxes();
-    let lines: Vec<Line> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let cursor = if i == app.active_filter().selected && active {
-                crate::ui::cursor_symbol(app)
-            } else {
-                "  ".to_string()
-            };
-            let check = if row.checked { "[x]" } else { "[ ]" };
-            let indent = if matches!(row.id, FilterId::Repo(_)) { "  " } else { "" };
-            let style = if i == app.active_filter().selected && active {
-                crate::ui::highlight_style(app)
-            } else {
-                Style::default().fg(pal.fg)
-            };
-            Line::from(Span::styled(
-                format!("{cursor}{check} {indent}{}", row.label),
-                style,
-            ))
-        })
-        .collect();
+    let sel = app.active_filter().selected;
+    let mut lines: Vec<Line> = Vec::new();
+    let mut reason_header = false;
+    for (i, row) in rows.iter().enumerate() {
+        // A "reason" sub-heading once, before the first reason (radio) row.
+        if matches!(row.id, FilterId::Reason(_)) && !reason_header {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(" reason", Style::default().fg(pal.muted))));
+            reason_header = true;
+        }
+        let selected = i == sel && active;
+        let cursor = if selected { crate::ui::cursor_symbol(app) } else { "  ".to_string() };
+        // Reasons are mutually exclusive, so show them as radios, not checkboxes.
+        let mark = match row.id {
+            FilterId::Reason(_) => if row.checked { "(•)" } else { "( )" },
+            _ => if row.checked { "[x]" } else { "[ ]" },
+        };
+        let indent = if matches!(row.id, FilterId::Repo(_)) { "  " } else { "" };
+        let style = if selected {
+            crate::ui::highlight_style(app)
+        } else {
+            Style::default().fg(pal.fg)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{cursor}{mark} {indent}{}", row.label),
+            style,
+        )));
+    }
 
     let p = Paragraph::new(lines).block(crate::ui::themed_block(app, border, " filter "));
     frame.render_widget(p, area);

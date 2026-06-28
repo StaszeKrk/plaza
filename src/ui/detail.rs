@@ -210,7 +210,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         })
         .unwrap_or_default();
 
-    let inner = crate::ui::themed_block(app, border, " detail · ⏎ install · esc back ");
+    let detail_title =
+        if app.settings.show_hotkeys { " detail · ⏎ install · esc back " } else { " detail " };
+    let inner = crate::ui::themed_block(app, border, detail_title);
     let list_area = inner.inner(area);
     frame.render_widget(inner, area);
 

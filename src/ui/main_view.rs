@@ -51,7 +51,13 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(format!("[{chip}]"), style));
         spans.push(Span::raw(" "));
     }
-    let scope_title = if app.has_checkupdates {
+    let scope_title = if !app.settings.show_hotkeys {
+        if app.has_checkupdates {
+            " upgrade ".to_string()
+        } else {
+            " upgrade · (install pacman-contrib for live counts) ".to_string()
+        }
+    } else if app.has_checkupdates {
         " upgrade · h/l scope · ⏎ run ".to_string()
     } else {
         " upgrade · h/l · ⏎ run · (install pacman-contrib for live counts) ".to_string()
@@ -99,17 +105,11 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
 
     let reason = match app.manage_reason {
         crate::model::ReasonFilter::All => String::new(),
-        r => {
-            let hidden = app.dep_updates_hidden();
-            if hidden > 0 {
-                format!("· {} · deps: {hidden} ", r.label())
-            } else {
-                format!("· {} ", r.label())
-            }
-        }
+        r => format!("· {} ", r.label()),
     };
+    let hints = if app.settings.show_hotkeys { "· ⏎/r remove · u upgrade " } else { "" };
     let title = if app.manage_filter.is_empty() {
-        format!(" installed ({}) {reason}· ⏎/r remove · u upgrade · e reason ", rows.len())
+        format!(" installed ({}) {reason}{hints}", rows.len())
     } else {
         format!(
             " installed ({}/{}) {reason}· filter:'{}' ",

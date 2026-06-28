@@ -587,15 +587,6 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
-    // `e` cycles the Manage installation-reason filter (unless typing).
-    if key.code == KeyCode::Char('e')
-        && app.active_view == ActiveView::Manage
-        && !(app.focus == Focus::Search && app.interacting)
-    {
-        app.cycle_reason();
-        return;
-    }
-
     // Two modes: navigate (move the hovered panel) and interact (act inside the
     // focused panel). Enter/Space activates; Esc steps back out.
     if app.interacting {

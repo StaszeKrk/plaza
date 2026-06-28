@@ -28,6 +28,10 @@ pub struct Settings {
     pub skin: String,
     /// How the matched substring is drawn in the package-name cell.
     pub highlight: HighlightMode,
+    /// Repo ids hidden by default in the Search filter (restored at launch).
+    pub default_search_filter_off: Vec<String>,
+    /// Repo ids hidden by default in the Manage filter (restored at launch).
+    pub default_manage_filter_off: Vec<String>,
 }
 
 impl Default for Settings {
@@ -42,6 +46,8 @@ impl Default for Settings {
             palette: crate::theme::DEFAULT_PALETTE.to_string(),
             skin: crate::theme::DEFAULT_SKIN.to_string(),
             highlight: HighlightMode::default(),
+            default_search_filter_off: Vec::new(),
+            default_manage_filter_off: Vec::new(),
         }
     }
 }
@@ -110,6 +116,31 @@ mod tests {
         let s = Settings { aur_helper: AurHelper::Paru, ..Default::default() };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.aur_helper, AurHelper::Paru);
+    }
+
+    #[test]
+    fn defaults_have_empty_filter_defaults() {
+        let s = Settings::default();
+        assert!(s.default_search_filter_off.is_empty());
+        assert!(s.default_manage_filter_off.is_empty());
+    }
+
+    #[test]
+    fn old_settings_without_filter_defaults_load_empty() {
+        let json = r#"{"show_hotkeys":true,"debounce_ms":400}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.default_search_filter_off.is_empty());
+        assert!(s.default_manage_filter_off.is_empty());
+    }
+
+    #[test]
+    fn roundtrip_keeps_filter_defaults() {
+        let s = Settings {
+            default_manage_filter_off: vec!["multilib".into()],
+            ..Default::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.default_manage_filter_off, vec!["multilib".to_string()]);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::model::{AurHelper, RemoveDepth};
+use crate::model::{AurHelper, HighlightMode, RemoveDepth};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -26,6 +26,8 @@ pub struct Settings {
     pub palette: String,
     /// Active skin name (built-in or a file in `~/.config/plaza/skins/`).
     pub skin: String,
+    /// How the matched substring is drawn in the package-name cell.
+    pub highlight: HighlightMode,
 }
 
 impl Default for Settings {
@@ -39,6 +41,7 @@ impl Default for Settings {
             hide_idle_filter: true,
             palette: crate::theme::DEFAULT_PALETTE.to_string(),
             skin: crate::theme::DEFAULT_SKIN.to_string(),
+            highlight: HighlightMode::default(),
         }
     }
 }
@@ -107,6 +110,18 @@ mod tests {
         let s = Settings { aur_helper: AurHelper::Paru, ..Default::default() };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.aur_helper, AurHelper::Paru);
+    }
+
+    #[test]
+    fn default_highlight_is_underline() {
+        assert_eq!(Settings::default().highlight, HighlightMode::Underline);
+    }
+
+    #[test]
+    fn old_settings_without_highlight_load_as_underline() {
+        let json = r#"{"show_hotkeys":true,"debounce_ms":400}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.highlight, HighlightMode::Underline);
     }
 
     #[test]

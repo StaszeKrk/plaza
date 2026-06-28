@@ -61,6 +61,17 @@ pub fn relevance_sort(query: &str, rows: &mut [PackageRow]) {
     });
 }
 
+/// Byte range of the first case-insensitive (ASCII) occurrence of `query` in
+/// `name`, for underlining the matched part in the results list. ASCII case
+/// folding preserves byte offsets, so the range slices `name` directly.
+pub fn match_range(name: &str, query: &str) -> Option<(usize, usize)> {
+    if query.is_empty() {
+        return None;
+    }
+    let start = name.to_ascii_lowercase().find(&query.to_ascii_lowercase())?;
+    Some((start, start + query.len()))
+}
+
 pub fn rank(q: &str, name: &str) -> u8 {
     let n = name.to_lowercase();
     if n == q {
@@ -141,6 +152,15 @@ mod tests {
         assert_eq!(badges, vec!["world", "extra-x86-64-v3", "extra"]);
         // First provider is the highest-priority repo (what pacman installs).
         assert_eq!(rows[0].providers[0].version, "0.12.3-1");
+    }
+
+    #[test]
+    fn match_range_finds_case_insensitive_substring() {
+        assert_eq!(match_range("Thunar", "na"), Some((3, 5)));
+        assert_eq!(match_range("firefox", "FIRE"), Some((0, 4)));
+        assert_eq!(match_range("snappy", "na"), Some((1, 3)));
+        assert_eq!(match_range("firefox", "zzz"), None);
+        assert_eq!(match_range("firefox", ""), None);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::app::{ActiveView, App, Focus, MainView};
-use crate::model::SourceId;
+use crate::model::{HighlightMode, SourceId};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::widgets::Paragraph;
@@ -67,13 +67,17 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = rows
         .iter()
         .map(|pk| {
-            let mut spans = vec![
-                Span::styled(format!("{:<28} ", truncate(&pk.name, 28)), Style::default().fg(pal.fg)),
-                Span::styled(
-                    format!("{:<16} ", truncate(&pk.version, 16)),
-                    Style::default().fg(pal.muted),
-                ),
-            ];
+            let mut spans = name_cell(
+                &pk.name,
+                &app.manage_filter,
+                Style::default().fg(pal.fg),
+                app.settings.highlight,
+                pal.accent,
+            );
+            spans.push(Span::styled(
+                format!("{:<16} ", truncate(&pk.version, 16)),
+                Style::default().fg(pal.muted),
+            ));
             match app.update_for(&pk.name) {
                 Some(nv) => spans.push(Span::styled(
                     format!("{}{:<13} ", crate::ui::ic_update(app), truncate(nv, 13)),
@@ -138,9 +142,12 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
             }
             // Installed packages show their name green wherever they appear.
             let name_color = if row.any_installed() { pal.installed } else { pal.fg };
-            spans.push(Span::styled(
-                format!("{:<28} ", truncate(&row.name, 28)),
+            spans.extend(name_cell(
+                &row.name,
+                &app.query,
                 Style::default().fg(name_color),
+                app.settings.highlight,
+                pal.accent,
             ));
             for prov in &shown {
                 spans.push(crate::ui::badge_span(app, app.provider_badge(prov), prov.source_id));
@@ -167,6 +174,40 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
         state.select(Some(app.results_selected.min(rows.len() - 1)));
     }
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// The package-name cell for a list: the name padded to 28 chars, with the part
+/// matching `query` styled per `mode` so the eye finds it in substring matches.
+fn name_cell(
+    name: &str,
+    query: &str,
+    base: Style,
+    mode: HighlightMode,
+    accent: Color,
+) -> Vec<Span<'static>> {
+    let shown = truncate(name, 28);
+    let pad = " ".repeat(28usize.saturating_sub(shown.chars().count()) + 1);
+    let range = if mode == HighlightMode::Off {
+        None
+    } else {
+        crate::search::aggregator::match_range(&shown, query)
+    };
+    match range {
+        Some((s, e)) => {
+            let hi = match mode {
+                HighlightMode::Color => base.fg(accent),
+                HighlightMode::Underline => base.add_modifier(Modifier::UNDERLINED),
+                HighlightMode::Both => base.fg(accent).add_modifier(Modifier::UNDERLINED),
+                HighlightMode::Off => base,
+            };
+            vec![
+                Span::styled(shown[..s].to_string(), base),
+                Span::styled(shown[s..e].to_string(), hi),
+                Span::styled(format!("{}{}", &shown[e..], pad), base),
+            ]
+        }
+        None => vec![Span::styled(format!("{shown}{pad}"), base)],
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

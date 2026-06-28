@@ -57,8 +57,10 @@ General:
 - A small options menu (press `o`): hide the keybinding hints, collapse all repos
   into one `[official]` badge, switch the color palette and skin (see
   [Theming](#theming)), set the search delay, pick the remove depth, choose
-  the AUR helper (auto, yay, or paru), and whether the filter box hides when it
-  is not in use. Settings are saved to `~/.config/plaza/settings.json`.
+  the AUR helper (auto, yay, or paru), whether the filter box hides when it
+  is not in use, and how the matched substring is drawn in result and Manage
+  names (off, color, underline, or both). Settings are saved to
+  `~/.config/plaza/settings.json`.
 
 ## Requirements
 

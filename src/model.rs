@@ -186,6 +186,43 @@ impl RemoveDepth {
     }
 }
 
+/// How the substring matching the search/filter text is drawn in the name cell.
+/// Default is `Underline`. Cycled in Options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum HighlightMode {
+    /// No special styling on the match.
+    Off,
+    /// Recolor the match with the accent color.
+    Color,
+    /// Underline the match, keeping its color.
+    #[default]
+    Underline,
+    /// Accent color and underline.
+    Both,
+}
+
+impl HighlightMode {
+    /// Short label for the options overlay.
+    pub fn label(self) -> &'static str {
+        match self {
+            HighlightMode::Off => "off",
+            HighlightMode::Color => "color",
+            HighlightMode::Underline => "underline",
+            HighlightMode::Both => "color + underline",
+        }
+    }
+
+    /// Cycle order for the options overlay.
+    pub fn next(self) -> HighlightMode {
+        match self {
+            HighlightMode::Off => HighlightMode::Color,
+            HighlightMode::Color => HighlightMode::Underline,
+            HighlightMode::Underline => HighlightMode::Both,
+            HighlightMode::Both => HighlightMode::Off,
+        }
+    }
+}
+
 /// Command that removes `name` at the given depth. Removal goes through pacman
 /// for both native and foreign (AUR) packages; a foreign package is still
 /// tracked in the local db.

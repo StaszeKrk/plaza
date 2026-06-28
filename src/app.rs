@@ -335,7 +335,7 @@ impl App {
     // --- Options overlay ---
 
     /// Number of option rows.
-    pub const OPTIONS_COUNT: usize = 8;
+    pub const OPTIONS_COUNT: usize = 9;
 
     pub fn move_options(&mut self, delta: i32) {
         let max = Self::OPTIONS_COUNT as i32 - 1;
@@ -353,6 +353,7 @@ impl App {
             5 => self.settings.remove_depth = self.settings.remove_depth.next(),
             6 => self.cycle_aur_helper(),
             7 => self.settings.hide_idle_filter = !self.settings.hide_idle_filter,
+            8 => self.settings.highlight = self.settings.highlight.next(),
             _ => {}
         }
         self.settings.save();
@@ -1032,7 +1033,7 @@ mod tests {
 
     #[test]
     fn options_count_matches_rows() {
-        assert_eq!(App::OPTIONS_COUNT, 8);
+        assert_eq!(App::OPTIONS_COUNT, 9);
     }
 
     #[test]

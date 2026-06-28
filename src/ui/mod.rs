@@ -320,6 +320,10 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
             sel == 7,
             format!("{} Hide filter box when not in use", check(app.settings.hide_idle_filter)),
         ),
+        row(
+            sel == 8,
+            format!("    Highlight substrings: {}", app.settings.highlight.label()),
+        ),
         Line::from(""),
         Line::from(Span::styled(
             "  \u{2191}\u{2193} move \u{b7} space toggle/cycle \u{b7} esc close",

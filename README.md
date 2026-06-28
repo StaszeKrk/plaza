@@ -36,6 +36,13 @@ Manage:
 - Upgrades per source or all at once. "All" chains each source in one task
   (`sudo pacman -Syu && paru -Sua`, using whichever AUR helper you have).
 - Upgrades a single highlighted package with `u`, when it has a pending update.
+- Shows a detail pane beside the list (`pacman -Qi` for the highlighted package):
+  version, install date, build date, size, install reason (explicit or
+  dependency), what requires it, and what it depends on. Loaded as the selection
+  moves. The pane hides on narrow terminals.
+- Filters the list by installation reason with `e`: all, explicitly installed
+  only, or orphans (dependencies nothing requires, `pacman -Qdt`). The default
+  is set in options.
 
 General:
 
@@ -43,8 +50,10 @@ General:
   to show only the repos you pick (toggle one repo, all pacman repos at once, or
   the AUR). It follows the collapse-repos option. By default the box appears only
   while you are in it or while a filter is active; turn off "hide filter box when
-  not in use" in options to keep it on screen at all times. The selection resets
-  each launch.
+  not in use" in options to keep it on screen at all times. Search and Manage
+  keep separate filters, so hiding a repo in one view does not affect the other.
+  Press `s` in the box to save the current view's filter as its launch default;
+  otherwise the selection resets each launch.
 - Actions run in a background pane backed by a real terminal, so sudo prompts and
   AUR build questions work normally. A hotkey returns you to it.
 - Confirming an action adds it to a queue. The queue runs one task at a time,
@@ -54,13 +63,14 @@ General:
 - When a running task stops at a prompt (sudo password, a pacman or AUR
   question) and you are not on the action pane, the status bar tells you it is
   waiting for input and which key opens the pane to answer.
-- A small options menu (press `o`): hide the keybinding hints, collapse all repos
-  into one `[official]` badge, switch the color palette and skin (see
-  [Theming](#theming)), set the search delay, pick the remove depth, choose
-  the AUR helper (auto, yay, or paru), whether the filter box hides when it
-  is not in use, and how the matched substring is drawn in result and Manage
-  names (off, color, underline, or both). Settings are saved to
-  `~/.config/plaza/settings.json`.
+- A small options menu (press `o`), grouped into categories (Appearance, Search,
+  Manage, Filters, General): hide the keybinding hints, collapse all repos into
+  one `[official]` badge, switch the color palette and skin (see
+  [Theming](#theming)), set the search delay, pick the remove depth, choose the
+  AUR helper (auto, yay, or paru), set the default Manage view (all, explicit, or
+  orphans), choose whether the filter box hides when it is not in use, and pick
+  how the matched substring is drawn in result and Manage names (off, color,
+  underline, or both). Settings are saved to `~/.config/plaza/settings.json`.
 
 ## Requirements
 
@@ -114,6 +124,8 @@ Plaza has two modes, like a tiling layout you tab around:
 | Tab | switch between the Search and Manage views |
 | / | jump to the search bar from anywhere |
 | f | open or close the repository filter; Space toggles a checkbox |
+| s (in the filter box) | save the current view's filter as its launch default |
+| e (in Manage) | cycle the reason filter: all, explicit, orphans |
 | Enter (on a result) | open it, then Enter on a source to install |
 | r, Enter (in Manage list) | remove the selected package |
 | u (in Manage list) | upgrade the selected package, if it has an update |

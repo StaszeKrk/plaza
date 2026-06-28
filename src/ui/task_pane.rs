@@ -10,17 +10,27 @@ pub fn draw_peek(frame: &mut Frame, app: &App, area: Rect) {
     let Some(task) = &app.task else { return };
     let (title, _) = status_title(app, task);
     let done = matches!(task.state, TaskState::Done { .. });
-    let last_line = task
-        .parser
-        .screen()
-        .contents()
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .to_string();
 
-    let mut body = format!("{}\n{}", task.spec.targets.join(", "), last_line);
+    // Show the tail of the output (the whole progress block for parallel
+    // downloads), not just the last line. The peek is narrower than the PTY, so
+    // truncate each line to the pane width instead of wrapping it into a mess.
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let screen = task.parser.screen().contents();
+    let nonblank: Vec<&str> = screen.lines().filter(|l| !l.trim_end().is_empty()).collect();
+    // Reserve rows for the targets line, queue list, and hints so they stay
+    // visible; give the rest to the output tail (at least one line).
+    let reserved = 4
+        + if app.queue.is_empty() { 0 } else { app.queue.len() + 2 }
+        + if app.queue_paused { 2 } else { 0 };
+    let take = (area.height as usize).saturating_sub(reserved).clamp(1, 12);
+    let start = nonblank.len().saturating_sub(take);
+
+    let mut body = task.spec.targets.join(", ");
+    for line in &nonblank[start..] {
+        let truncated: String = line.chars().take(inner_w).collect();
+        body.push('\n');
+        body.push_str(&truncated);
+    }
     if !app.queue.is_empty() {
         body.push_str(&format!("\n\nqueued ({}):", app.queue.len()));
         for (i, spec) in app.queue.iter().enumerate() {

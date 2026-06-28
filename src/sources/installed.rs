@@ -28,6 +28,65 @@ impl InstalledIndex {
     }
 }
 
+/// Per-package detail parsed from `pacman -Qi`, shown in the Manage detail pane.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PkgDetail {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub url: String,
+    pub explicit: bool,
+    pub install_date: String,
+    pub build_date: String,
+    pub size: String,
+    pub required_by: Vec<String>,
+    pub optional_for: Vec<String>,
+    pub depends: Vec<String>,
+}
+
+/// Parse `pacman -Qi` output. Keys start at column 0 (`Name : value`); indented
+/// lines continue the previous field. `None` lists become empty vecs.
+pub fn parse_pkg_detail(qi: &str) -> PkgDetail {
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut current = String::new();
+    for line in qi.lines() {
+        if line.starts_with(char::is_whitespace) && !current.is_empty() {
+            // continuation of the previous field's value
+            if let Some(v) = fields.get_mut(&current) {
+                v.push(' ');
+                v.push_str(line.trim());
+            }
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            current = k.trim().to_string();
+            fields.insert(current.clone(), v.trim().to_string());
+        }
+    }
+    let get = |k: &str| fields.get(k).cloned().unwrap_or_default();
+    let list = |k: &str| -> Vec<String> {
+        let v = get(k);
+        if v == "None" || v.is_empty() {
+            Vec::new()
+        } else {
+            v.split_whitespace().map(|s| s.to_string()).collect()
+        }
+    };
+    PkgDetail {
+        name: get("Name"),
+        version: get("Version"),
+        description: get("Description"),
+        url: get("URL"),
+        explicit: get("Install Reason").starts_with("Explicitly"),
+        install_date: get("Install Date"),
+        build_date: get("Build Date"),
+        size: get("Installed Size"),
+        required_by: list("Required By"),
+        optional_for: list("Optional For"),
+        depends: list("Depends On"),
+    }
+}
+
 /// Count non-empty lines (used for installed counts and update counts).
 pub fn count_lines(output: &str) -> usize {
     output.lines().filter(|l| !l.trim().is_empty()).count()
@@ -188,6 +247,49 @@ mod tests {
         assert!(by("firefox").explicit && !by("firefox").orphan);
         assert!(by("ldb").orphan && !by("ldb").explicit);
         assert!(!by("libfoo").explicit && !by("libfoo").orphan);
+    }
+
+    #[test]
+    fn parses_qi_detail() {
+        let qi = "\
+Name            : firefox
+Version         : 152.0.3-1
+Description     : Fast web browser
+URL             : https://www.mozilla.org/firefox/
+Depends On      : alsa-lib  at-spi2-core  gtk3
+Required By     : None
+Optional For    : None
+Installed Size  : 285.93 MiB
+Build Date      : Fri 26 Jun 2026 07:00:16 AM CEST
+Install Date    : Sat 12 Jun 2026 10:00:00 AM CEST
+Install Reason  : Explicitly installed
+";
+        let d = parse_pkg_detail(qi);
+        assert_eq!(d.name, "firefox");
+        assert_eq!(d.version, "152.0.3-1");
+        assert_eq!(d.description, "Fast web browser");
+        assert_eq!(d.url, "https://www.mozilla.org/firefox/");
+        assert!(d.explicit);
+        assert_eq!(d.install_date, "Sat 12 Jun 2026 10:00:00 AM CEST");
+        assert_eq!(d.size, "285.93 MiB");
+        assert_eq!(d.depends, vec!["alsa-lib", "at-spi2-core", "gtk3"]);
+        assert!(d.required_by.is_empty()); // None -> empty
+        assert!(d.optional_for.is_empty());
+    }
+
+    #[test]
+    fn qi_dependency_install_reason_not_explicit() {
+        let qi = "Name : foo\nInstall Reason  : Installed as a dependency for an installed package\n";
+        assert!(!parse_pkg_detail(qi).explicit);
+    }
+
+    #[test]
+    fn qi_continuation_lines_append() {
+        // pacman may wrap a long Required By across indented lines.
+        let qi = "Required By     : aaa  bbb\n                  ccc  ddd\nInstalled Size  : 1 MiB\n";
+        let d = parse_pkg_detail(qi);
+        assert_eq!(d.required_by, vec!["aaa", "bbb", "ccc", "ddd"]);
+        assert_eq!(d.size, "1 MiB");
     }
 
     #[test]

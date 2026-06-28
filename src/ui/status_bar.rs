@@ -72,7 +72,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 },
                 Focus::Scope => "h/l scope · ⏎ upgrade · esc back",
                 Focus::List => "↑↓ move · ⏎/r remove · u upgrade · esc back",
-                Focus::Filter => "↑↓ move · space toggle · f/esc close",
+                Focus::Filter => "↑↓ move · space toggle · s save default · f/esc close",
                 Focus::TaskPane => "task pane · `=collapse",
             }
         };

@@ -790,6 +790,25 @@ impl App {
         self.active_filter_mut().selected = clamp_index(cur, delta, len);
     }
 
+    /// Persist the active view's current repo filter as its launch default
+    /// (the `s` key in the filter box). Saves only the active view.
+    pub fn save_filter_default(&mut self) {
+        let mut off: Vec<String> = self.active_filter().off.iter().cloned().collect();
+        off.sort();
+        let which = match self.active_view {
+            ActiveView::Manage => {
+                self.settings.default_manage_filter_off = off;
+                "Manage"
+            }
+            _ => {
+                self.settings.default_search_filter_off = off;
+                "Search"
+            }
+        };
+        self.settings.save();
+        self.status_msg = Some(format!("saved {which} filter default"));
+    }
+
     /// Open the filter box and focus it (the `f` key).
     pub fn open_filter(&mut self) {
         self.focus = Focus::Filter;
@@ -1432,6 +1451,38 @@ mod tests {
         app.search_filter.off.insert("extra".into());
         assert!(!app.repo_shown("extra"));
         assert!(app.repo_shown("world"));
+    }
+
+    #[test]
+    fn save_filter_default_persists_active_view_only() {
+        // Redirect config writes to a temp dir so the test never touches the real
+        // ~/.config. save() reads XDG_CONFIG_HOME (see config::config_base).
+        let tmp = std::env::temp_dir().join(format!("plaza-test-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+        let mut app = App::with_settings(
+            vec![SourceId::Pacman, SourceId::Aur],
+            Settings::default(),
+        );
+        app.filter_repos = vec!["extra".into(), "world".into(), "multilib".into()];
+        app.active_view = ActiveView::Manage;
+        app.manage_filter_repo.off.insert("multilib".into());
+        app.save_filter_default();
+        assert_eq!(app.settings.default_manage_filter_off, vec!["multilib".to_string()]);
+        assert!(app.settings.default_search_filter_off.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn new_app_seeds_filters_from_defaults() {
+        let settings = Settings {
+            default_search_filter_off: vec!["world".into()],
+            default_manage_filter_off: vec!["aur".into()],
+            ..Default::default()
+        };
+        let app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], settings);
+        assert!(app.search_filter.off.contains("world"));
+        assert!(app.manage_filter_repo.off.contains("aur"));
     }
 
     #[test]

@@ -848,12 +848,14 @@ fn interact_list(app: &mut App, key: KeyEvent) {
 }
 
 /// Interact: the repo-filter box. j/k move, space/Enter toggle the checkbox,
-/// Esc steps back out (the box stays if a filter is active).
+/// `s` saves the active view's filter as its default, Esc steps back out (the box
+/// stays if a filter is active).
 fn interact_filter(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => app.move_filter(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_filter(1),
         KeyCode::Char(' ') | KeyCode::Enter => app.toggle_filter(),
+        KeyCode::Char('s') => app.save_filter_default(),
         KeyCode::Esc => app.close_filter(),
         _ => {}
     }

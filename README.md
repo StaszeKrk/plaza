@@ -127,7 +127,7 @@ either one.
 
 Plaza's look is split into two independent, swappable parts:
 
-- a **palette**: the colors, and
+- a **palette**: the colors
 - a **skin**: everything else (border style, corner radius, glyphs/icons, and the
   highlight and badge styles).
 

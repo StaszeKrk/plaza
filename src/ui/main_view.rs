@@ -97,11 +97,15 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    let reason = match app.manage_reason {
+        crate::model::ReasonFilter::All => String::new(),
+        r => format!("· {} ", r.label()),
+    };
     let title = if app.manage_filter.is_empty() {
-        format!(" installed ({}) · ⏎/r remove · u upgrade ", rows.len())
+        format!(" installed ({}) {reason}· ⏎/r remove · u upgrade · e reason ", rows.len())
     } else {
         format!(
-            " installed ({}/{}) · filter:'{}' ",
+            " installed ({}/{}) {reason}· filter:'{}' ",
             rows.len(),
             app.installed_list.len(),
             app.manage_filter

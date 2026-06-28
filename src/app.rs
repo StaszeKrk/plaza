@@ -175,6 +175,9 @@ pub struct App {
     /// Manage-view filter text. Kept separate from `query` so each tab keeps its
     /// own search box contents.
     pub manage_filter: String,
+    /// Manage installation-reason filter (All/Explicit/Orphans). Seeded from
+    /// `settings.default_reason`, cycled with `e`.
+    pub manage_reason: crate::model::ReasonFilter,
     /// Repo filter (the `f` box), per view. Each `RepoFilter.off` is the set of
     /// *unchecked* repo identifiers (concrete repo names plus "aur"); empty means
     /// show all. Seeded at launch from the persisted defaults. `filter_repos` is
@@ -287,6 +290,7 @@ impl App {
             installed_list: Vec::new(),
             installed_selected: 0,
             manage_filter: String::new(),
+            manage_reason: settings.default_reason,
             search_filter,
             manage_filter_repo,
             filter_repos: Vec::new(),
@@ -681,6 +685,11 @@ impl App {
             .iter()
             .filter(|p| q.is_empty() || p.name.to_ascii_lowercase().contains(&q))
             .filter(|p| !self.manage_filter_repo.off.contains(&p.origin))
+            .filter(|p| match self.manage_reason {
+                crate::model::ReasonFilter::All => true,
+                crate::model::ReasonFilter::Explicit => p.explicit,
+                crate::model::ReasonFilter::Orphans => p.orphan,
+            })
             .collect();
         rows.sort_by(|a, b| {
             let (au, bu) = (updates.contains(a.name.as_str()), updates.contains(b.name.as_str()));
@@ -715,6 +724,13 @@ impl App {
     pub fn clamp_installed(&mut self) {
         let n = self.manage_rows().len();
         self.installed_selected = self.installed_selected.min(n.saturating_sub(1));
+    }
+
+    /// Advance the Manage reason filter (All -> Explicit -> Orphans), re-clamping
+    /// the selection since the visible rows change.
+    pub fn cycle_reason(&mut self) {
+        self.manage_reason = self.manage_reason.next();
+        self.clamp_installed();
     }
 
     // --- repo filter (the `f` box) ---
@@ -1525,6 +1541,39 @@ mod tests {
         app.search_filter.off.insert("extra".into());
         assert!(!app.repo_shown("extra"));
         assert!(app.repo_shown("world"));
+    }
+
+    #[test]
+    fn manage_rows_filter_by_reason() {
+        use crate::model::ReasonFilter;
+        let mut app = app_with_repos();
+        app.installed_list = vec![
+            InstalledPkg { name: "firefox".into(), explicit: true, ..Default::default() },
+            InstalledPkg { name: "libfoo".into(), ..Default::default() },
+            InstalledPkg { name: "ldb".into(), orphan: true, ..Default::default() },
+        ];
+        app.manage_reason = ReasonFilter::All;
+        assert_eq!(app.manage_rows().len(), 3);
+        app.manage_reason = ReasonFilter::Explicit;
+        let n: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(n, vec!["firefox"]);
+        app.manage_reason = ReasonFilter::Orphans;
+        let n: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(n, vec!["ldb"]);
+    }
+
+    #[test]
+    fn cycle_reason_advances_and_clamps() {
+        use crate::model::ReasonFilter;
+        let mut app = app_with_repos();
+        app.installed_list = vec![
+            InstalledPkg { name: "firefox".into(), explicit: true, ..Default::default() },
+            InstalledPkg { name: "ldb".into(), orphan: true, ..Default::default() },
+        ];
+        app.installed_selected = 1;
+        app.cycle_reason(); // -> Explicit, only firefox remains
+        assert_eq!(app.manage_reason, ReasonFilter::Explicit);
+        assert_eq!(app.installed_selected, 0); // clamped
     }
 
     #[test]

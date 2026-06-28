@@ -1143,7 +1143,7 @@ mod tests {
 
     #[test]
     fn start_query_bumps_id_and_clears() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         let id1 = app.start_query("fire".into());
         let id2 = app.start_query("firefox".into());
         assert_ne!(id1, id2);
@@ -1153,7 +1153,7 @@ mod tests {
 
     #[test]
     fn applies_matching_results_and_ignores_stale() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         let id = app.start_query("firefox".into());
 
         app.apply_search_results(id, SourceId::Pacman, vec![hit("firefox", SourceId::Pacman)]);
@@ -1187,7 +1187,7 @@ mod tests {
 
     #[test]
     fn move_options_clamps_to_flat_len() {
-        let mut app = App::new(vec![]);
+        let mut app = App::with_settings(vec![], Settings::default());
         app.move_options(-5);
         assert_eq!(app.options_selected, 0);
         app.move_options(1000);
@@ -1214,7 +1214,7 @@ mod tests {
 
     #[test]
     fn cycling_palette_changes_selection() {
-        let mut app = App::new(vec![]);
+        let mut app = App::with_settings(vec![], Settings::default());
         let before = app.settings.palette.clone();
         app.cycle_palette();
         assert_ne!(app.settings.palette, before);
@@ -1226,7 +1226,7 @@ mod tests {
 
     #[test]
     fn cycling_skin_changes_selection() {
-        let mut app = App::new(vec![]);
+        let mut app = App::with_settings(vec![], Settings::default());
         let before = app.settings.skin.clone();
         app.cycle_skin();
         assert_ne!(app.settings.skin, before);
@@ -1234,7 +1234,7 @@ mod tests {
 
     #[test]
     fn toggle_view_flips_search_and_manage() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         assert_eq!(app.active_view, ActiveView::Search);
         app.toggle_view();
         assert_eq!(app.active_view, ActiveView::Manage);
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[test]
     fn hover_move_navigates_panels() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         // Search view: Search → Main → Sidebar
         app.focus = Focus::Search;
         app.hover_move(Dir::Down);
@@ -1270,7 +1270,7 @@ mod tests {
 
     #[test]
     fn manage_rows_filter_and_float_updates() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         app.installed_list = vec![ipkg("alpha"), ipkg("firefox"), ipkg("firewalld"), ipkg("zoxide")];
         app.updates_list = vec![UpdateEntry {
             name: "firewalld".into(),
@@ -1291,7 +1291,7 @@ mod tests {
 
     #[test]
     fn manage_filter_match_beats_upgradable() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         // "libfire" is upgradable but only a substring match; "firefox" is a prefix
         // match with no update. The prefix match must win over the upgradable float.
         app.installed_list = vec![ipkg("firefox"), ipkg("libfire")];
@@ -1308,7 +1308,7 @@ mod tests {
 
     #[test]
     fn installed_selection_clamps_and_reads() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.installed_list = vec![ipkg("a"), ipkg("b")];
         app.move_installed(-5);
         assert_eq!(app.installed_selected, 0);
@@ -1319,7 +1319,7 @@ mod tests {
 
     #[test]
     fn remove_spec_uses_configured_depth() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.installed_list = vec![ipkg("firefox")];
         let spec = app.remove_spec().expect("spec");
         assert_eq!(spec.targets, vec!["firefox"]);
@@ -1334,13 +1334,13 @@ mod tests {
 
     #[test]
     fn remove_spec_none_when_list_empty() {
-        let app = App::new(vec![SourceId::Pacman]);
+        let app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         assert!(app.remove_spec().is_none());
     }
 
     /// App with both sources present and yay resolved as the AUR helper.
     fn app_with_yay() -> App {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         app.helpers_available = (true, false);
         app.recompute_aur_helper();
         app
@@ -1371,7 +1371,7 @@ mod tests {
     #[test]
     fn upgrade_spec_drops_aur_when_no_helper() {
         // No helper installed: "All" still upgrades repos, AUR leg is dropped.
-        let app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         assert!(app.aur_helper_bin.is_none());
         let all = app.upgrade_spec();
         // Single remaining command (pacman) is returned unwrapped by chain_commands.
@@ -1381,7 +1381,7 @@ mod tests {
 
     #[test]
     fn can_upgrade_selected_gates_aur_only_scope() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         // No helper: All (0) and repo (1) ok, AUR (2) blocked.
         app.upgrade_scope_selected = 0;
         assert!(app.can_upgrade_selected());
@@ -1397,7 +1397,7 @@ mod tests {
 
     #[test]
     fn cycle_aur_helper_recomputes_binary() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         // App::new loads the real user config; pin the setting so the test does
         // not depend on the build machine's ~/.config/plaza/settings.json.
         app.settings.aur_helper = crate::model::AurHelper::Auto;
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn upgrade_scope_pending_counts_per_source() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         let upd = |name: &str, src| UpdateEntry {
             name: name.into(),
             old_version: "1".into(),
@@ -1447,7 +1447,7 @@ mod tests {
 
     #[test]
     fn enqueue_and_dequeue_preserve_order() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.enqueue(spec("a", Action::Install));
         app.enqueue(spec("b", Action::Remove));
         assert_eq!(app.queue.len(), 2);
@@ -1458,7 +1458,7 @@ mod tests {
 
     #[test]
     fn remove_queued_drops_item_and_clamps_selection() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         for n in ["a", "b", "c"] {
             app.enqueue(spec(n, Action::Install));
         }
@@ -1473,7 +1473,7 @@ mod tests {
 
     #[test]
     fn clear_queue_empties_and_resets_pause() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.enqueue(spec("a", Action::Install));
         app.queue_paused = true;
         app.queue_selected = 0;
@@ -1485,7 +1485,7 @@ mod tests {
 
     #[test]
     fn move_queue_clamps_to_pending_range() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         for n in ["a", "b"] {
             app.enqueue(spec(n, Action::Install));
         }
@@ -1497,7 +1497,7 @@ mod tests {
 
     #[test]
     fn update_source_for_reads_updates_list() {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         app.updates_list = vec![
             UpdateEntry { name: "firefox".into(), old_version: "1".into(), new_version: "2".into(), source_id: SourceId::Pacman },
             UpdateEntry { name: "yay".into(), old_version: "1".into(), new_version: "2".into(), source_id: SourceId::Aur },
@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn upgrade_one_spec_for_selected_updatable_package() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.installed_list = vec![ipkg("firefox"), ipkg("zoxide")];
         app.updates_list = vec![UpdateEntry {
             name: "firefox".into(),
@@ -1545,7 +1545,7 @@ mod tests {
     }
 
     fn app_with_repos() -> App {
-        let mut app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         app.filter_repos = vec!["extra".into(), "world".into(), "multilib".into()];
         app
     }
@@ -1778,7 +1778,7 @@ mod tests {
 
     #[test]
     fn selection_clamps_within_bounds() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         let id = app.start_query("f".into());
         app.apply_search_results(
             id,

@@ -366,6 +366,7 @@ pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 mod tests {
     use super::*;
     use crate::app::ActiveView;
+    use crate::config::Settings;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -385,7 +386,7 @@ mod tests {
 
     #[test]
     fn welcome_screen_renders_with_theme_footer() {
-        let app = App::new(vec![SourceId::Pacman, SourceId::Aur]);
+        let app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
         let text = render(&app);
         assert!(text.contains("plaza"));
         assert!(text.contains("palette:"));
@@ -394,7 +395,7 @@ mod tests {
 
     #[test]
     fn options_overlay_renders_theme_rows() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.options_open = true;
         let text = render(&app);
         assert!(text.contains("Palette:"));
@@ -403,7 +404,7 @@ mod tests {
 
     #[test]
     fn manage_view_renders_without_panic() {
-        let mut app = App::new(vec![SourceId::Pacman]);
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.active_view = ActiveView::Manage;
         let _ = render(&app);
     }

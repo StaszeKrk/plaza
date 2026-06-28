@@ -1,4 +1,4 @@
-use crate::model::{AurHelper, HighlightMode, RemoveDepth};
+use crate::model::{AurHelper, HighlightMode, ReasonFilter, RemoveDepth};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -32,6 +32,8 @@ pub struct Settings {
     pub default_search_filter_off: Vec<String>,
     /// Repo ids hidden by default in the Manage filter (restored at launch).
     pub default_manage_filter_off: Vec<String>,
+    /// Default Manage installation-reason filter at launch.
+    pub default_reason: ReasonFilter,
 }
 
 impl Default for Settings {
@@ -48,6 +50,7 @@ impl Default for Settings {
             highlight: HighlightMode::default(),
             default_search_filter_off: Vec::new(),
             default_manage_filter_off: Vec::new(),
+            default_reason: ReasonFilter::default(),
         }
     }
 }
@@ -116,6 +119,18 @@ mod tests {
         let s = Settings { aur_helper: AurHelper::Paru, ..Default::default() };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.aur_helper, AurHelper::Paru);
+    }
+
+    #[test]
+    fn default_reason_is_all() {
+        assert_eq!(Settings::default().default_reason, ReasonFilter::All);
+    }
+
+    #[test]
+    fn old_settings_without_reason_load_as_all() {
+        let json = r#"{"show_hotkeys":true,"debounce_ms":400}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.default_reason, ReasonFilter::All);
     }
 
     #[test]

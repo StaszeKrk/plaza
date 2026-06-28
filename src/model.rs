@@ -186,6 +186,39 @@ impl RemoveDepth {
     }
 }
 
+/// Which installed packages the Manage list shows, by installation reason.
+/// Default is `All`. Cycled in the Manage view (`e`) and as an option default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ReasonFilter {
+    /// Every installed package.
+    #[default]
+    All,
+    /// Only explicitly installed packages (`pacman -Qe`).
+    Explicit,
+    /// Only orphans: dependencies nothing requires (`pacman -Qdt`).
+    Orphans,
+}
+
+impl ReasonFilter {
+    /// Short label for the title and the options row.
+    pub fn label(self) -> &'static str {
+        match self {
+            ReasonFilter::All => "all",
+            ReasonFilter::Explicit => "explicit",
+            ReasonFilter::Orphans => "orphans",
+        }
+    }
+
+    /// Cycle order: All -> Explicit -> Orphans -> All.
+    pub fn next(self) -> ReasonFilter {
+        match self {
+            ReasonFilter::All => ReasonFilter::Explicit,
+            ReasonFilter::Explicit => ReasonFilter::Orphans,
+            ReasonFilter::Orphans => ReasonFilter::All,
+        }
+    }
+}
+
 /// How the substring matching the search/filter text is drawn in the name cell.
 /// Default is `Underline`. Cycled in Options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -415,6 +448,14 @@ pub fn days_ago(ts: i64, now: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reason_filter_cycles_all_explicit_orphans() {
+        assert_eq!(ReasonFilter::All.next(), ReasonFilter::Explicit);
+        assert_eq!(ReasonFilter::Explicit.next(), ReasonFilter::Orphans);
+        assert_eq!(ReasonFilter::Orphans.next(), ReasonFilter::All);
+        assert_eq!(ReasonFilter::default(), ReasonFilter::All);
+    }
 
     #[test]
     fn looks_like_prompt_matches_arch_prompts_only() {

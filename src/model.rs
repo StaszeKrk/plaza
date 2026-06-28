@@ -481,11 +481,12 @@ pub struct ActionSpec {
 pub struct InstalledStats {
     pub repo: usize,
     pub foreign: usize,
+    pub flatpak: usize,
 }
 
 impl InstalledStats {
     pub fn total(&self) -> usize {
-        self.repo + self.foreign
+        self.repo + self.foreign + self.flatpak
     }
 }
 
@@ -633,8 +634,8 @@ mod tests {
 
     #[test]
     fn installed_stats_total() {
-        let s = InstalledStats { repo: 1208, foreign: 77 };
-        assert_eq!(s.total(), 1285);
+        let s = InstalledStats { repo: 1208, foreign: 77, flatpak: 12 };
+        assert_eq!(s.total(), 1297);
     }
 
     #[test]

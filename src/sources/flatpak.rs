@@ -1,4 +1,5 @@
 use crate::model::{Action, CommandLine, PackageDetail, PackageHit, SourceId, SourceMeta};
+use crate::sources::installed::{InstalledPkg, PkgDetail};
 use crate::sources::Source;
 use async_trait::async_trait;
 use tokio::process::Command;
@@ -115,6 +116,55 @@ pub fn parse_installed(out: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Build Manage-view rows from `flatpak list --app --columns=application,version`.
+/// The app ID is stored as the row name so remove/upgrade target it directly;
+/// origin is "flatpak" (drives the filter and the remove routing). Flatpak apps
+/// are explicitly installed and never orphans.
+pub fn parse_installed_pkgs(out: &str) -> Vec<InstalledPkg> {
+    parse_installed(out)
+        .into_iter()
+        .map(|(id, version)| InstalledPkg {
+            name: id,
+            version,
+            origin: "flatpak".to_string(),
+            explicit: true,
+            orphan: false,
+        })
+        .collect()
+}
+
+/// Parse `flatpak info <app-id>` (installed app) into the Manage detail struct.
+/// Same `key: value` block as remote-info, plus a "Name - Description" title
+/// line. Flatpak has no dependency or required-by lists here, so those stay
+/// empty; apps are always explicitly installed.
+pub fn parse_info(out: &str) -> PkgDetail {
+    let mut d = PkgDetail { explicit: true, ..Default::default() };
+    if let Some(title) = out.lines().find(|l| !l.trim().is_empty()) {
+        match title.split_once(" - ") {
+            Some((n, desc)) => {
+                d.name = n.trim().to_string();
+                d.description = desc.trim().to_string();
+            }
+            None => d.name = title.trim().to_string(),
+        }
+    }
+    for line in out.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            let (k, v) = (k.trim(), v.trim());
+            if v.is_empty() {
+                continue;
+            }
+            match k {
+                "Version" => d.version = v.to_string(),
+                "Installed Size" => d.size = v.to_string(),
+                "Date" => d.build_date = v.to_string(),
+                _ => {}
+            }
+        }
+    }
+    d
+}
+
 /// Parse `flatpak remote-ls --user --app --updates` into the upgradable app IDs.
 /// The app ID is the first non-empty tab/space column; lines without one drop.
 pub fn parse_updates(out: &str) -> Vec<String> {
@@ -175,6 +225,30 @@ junk line with no tabs\n";
         );
         let ups = "org.mozilla.firefox\t152.1\tstable\n";
         assert_eq!(parse_updates(ups), vec!["org.mozilla.firefox".to_string()]);
+    }
+
+    #[test]
+    fn builds_installed_pkgs_with_flatpak_origin() {
+        let list = "org.mozilla.firefox\t152.0.3\norg.gimp.GIMP\t3.2.4\n";
+        let pkgs = parse_installed_pkgs(list);
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].name, "org.mozilla.firefox");
+        assert_eq!(pkgs[0].version, "152.0.3");
+        assert_eq!(pkgs[0].origin, "flatpak");
+        assert!(pkgs[0].explicit && !pkgs[0].orphan);
+    }
+
+    const FLATPAK_INFO: &str = "\nFreedesktop Platform - Runtime platform for applications\n\n            ID: org.freedesktop.Platform\n          Arch: x86_64\n        Branch: 25.08\n       Version: freedesktop-sdk-25.08.13\n       License: MIT\n  Installation: user\nInstalled Size: 657.0 MB\n\n        Commit: 3f0cb4a\n          Date: 2026-06-20 09:14:53 +0000\n";
+
+    #[test]
+    fn parses_flatpak_info_into_detail() {
+        let d = parse_info(FLATPAK_INFO);
+        assert_eq!(d.name, "Freedesktop Platform");
+        assert_eq!(d.description, "Runtime platform for applications");
+        assert_eq!(d.version, "freedesktop-sdk-25.08.13");
+        assert_eq!(d.size, "657.0 MB");
+        assert_eq!(d.build_date, "2026-06-20 09:14:53 +0000");
+        assert!(d.explicit);
     }
 
     #[test]

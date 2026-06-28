@@ -31,6 +31,11 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         head("INSTALLED"),
         fgl(format!(" repo   {:>6}", app.stats.repo)),
         fgl(format!(" aur    {:>6}", app.stats.foreign)),
+    ];
+    if app.present_sources().contains(&crate::model::SourceId::Flatpak) {
+        lines.push(fgl(format!(" flatpak{:>6}", app.stats.flatpak)));
+    }
+    lines.extend([
         fgl(format!(" total  {:>6}", app.stats.total())),
         Line::from(""),
         head("UPDATES"),
@@ -38,7 +43,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         upd_line("aur", app.updates.aur),
         Line::from(""),
         head("VIEWS"),
-    ];
+    ]);
     let active_idx = app.active_view.index();
     for (i, v) in views.iter().enumerate() {
         let marker = if i == app.sidebar_selected && active {

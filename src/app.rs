@@ -1,9 +1,9 @@
 use crate::action::runner::ActiveTask;
 use crate::config::Settings;
 use crate::model::{
-    chain_commands, remove_command, source_upgrade_command, upgrade_one_command, Action,
-    ActionSpec, InstalledStats, PackageDetail, PackageHit, PackageRow, Provider, SourceId,
-    UpdatesInfo,
+    chain_commands, remove_command, remove_command_flatpak, source_upgrade_command,
+    upgrade_one_command, Action, ActionSpec, InstalledStats, PackageDetail, PackageHit, PackageRow,
+    Provider, SourceId, UpdatesInfo,
 };
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use crate::search::aggregator::{merge, rank, relevance_sort};
@@ -946,6 +946,16 @@ impl App {
     /// depth configured in Options), or None if nothing is selected.
     pub fn remove_spec(&self) -> Option<ActionSpec> {
         let pkg = self.selected_installed()?;
+        // Flatpak removal goes through `flatpak uninstall`, not pacman, and has no
+        // `-R` depth family; route on the origin set by the installed-list builder.
+        if pkg.origin == "flatpak" {
+            return Some(ActionSpec {
+                targets: vec![pkg.name.clone()],
+                source_id: SourceId::Flatpak,
+                action: Action::Remove,
+                command: remove_command_flatpak(&pkg.name),
+            });
+        }
         Some(ActionSpec {
             targets: vec![pkg.name.clone()],
             source_id: SourceId::Pacman,
@@ -1349,6 +1359,21 @@ mod tests {
         app.settings.remove_depth = crate::model::RemoveDepth::Purge;
         let purge = app.remove_spec().expect("spec");
         assert_eq!(purge.command.args, vec!["pacman", "-Rns", "firefox"]);
+    }
+
+    #[test]
+    fn remove_spec_routes_flatpak_to_uninstall() {
+        let mut app = App::with_settings(vec![SourceId::Flatpak], Settings::default());
+        app.installed_list = vec![InstalledPkg {
+            name: "org.mozilla.firefox".into(),
+            version: "1".into(),
+            origin: "flatpak".into(),
+            ..Default::default()
+        }];
+        let spec = app.remove_spec().expect("spec");
+        assert_eq!(spec.source_id, SourceId::Flatpak);
+        assert_eq!(spec.command.program, "flatpak");
+        assert_eq!(spec.command.args, vec!["uninstall", "--user", "org.mozilla.firefox"]);
     }
 
     #[test]

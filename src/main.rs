@@ -327,12 +327,24 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
     tokio::spawn(async move {
         let repo = run_count(&["-Qnq"]).await;
         let foreign = run_count(&["-Qmq"]).await;
-        let _ = tx_inst.send(AppEvent::Stats(crate::model::InstalledStats { repo, foreign }));
+        // One `flatpak list` call feeds both the count and the index folding.
+        let fp_text = if flatpak { flatpak_list_text().await } else { String::new() };
+        let fp_count = sources::installed::count_lines(&fp_text);
+        let _ = tx_inst.send(AppEvent::Stats(crate::model::InstalledStats {
+            repo,
+            foreign,
+            flatpak: fp_count,
+        }));
 
         if let Ok(out) = Command::new("pacman").arg("-Q").output().await {
-            let idx = sources::installed::InstalledIndex::from_query_output(
+            let mut idx = sources::installed::InstalledIndex::from_query_output(
                 &String::from_utf8_lossy(&out.stdout),
             );
+            // Fold installed Flatpak app IDs into the index so search results show
+            // installed state for Flatpak too.
+            for (id, ver) in sources::flatpak::parse_installed(&fp_text) {
+                idx.insert(id, ver);
+            }
             let _ = tx_inst.send(AppEvent::Installed(idx));
         }
     });
@@ -354,8 +366,13 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
             &text(Command::new("pacman").arg("-Qdtq").output().await),
         );
         let ordered = sources::installed::ordered_repos(&sl);
-        let list =
+        let mut list =
             sources::installed::parse_installed_list(&native, &foreign, &repos, &explicit, &orphan);
+        // Append installed Flatpak apps (origin "flatpak"), then re-sort by name.
+        if flatpak {
+            list.extend(sources::flatpak::parse_installed_pkgs(&flatpak_list_text().await));
+            list.sort_by(|a, b| a.name.cmp(&b.name));
+        }
         let _ = tx_list.send(AppEvent::InstalledList(list, ordered));
     });
 
@@ -429,6 +446,17 @@ async fn run_count(args: &[&str]) -> usize {
         Ok(out) => sources::installed::count_lines(&String::from_utf8_lossy(&out.stdout)),
         Err(_) => 0,
     }
+}
+
+/// Installed Flatpak apps as `app-id<TAB>version` lines, or empty on failure.
+async fn flatpak_list_text() -> String {
+    Command::new("flatpak")
+        .env("LC_ALL", "C")
+        .args(["list", "--app", "--columns=application,version"])
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
 }
 
 /// Raw repo-update output (`name old -> new` lines). Prefers `checkupdates`
@@ -517,11 +545,23 @@ fn dispatch_manage_detail(app: &mut App, tx: &UnboundedSender<AppEvent>) {
         return;
     }
     app.manage_detail_inflight.insert(name.clone());
+    // Flatpak apps are not in the pacman db: `flatpak info` instead of `pacman -Qi`.
+    let is_flatpak = pkg.origin == "flatpak";
     let tx = tx.clone();
     tokio::spawn(async move {
-        let out = Command::new("pacman").arg("-Qi").arg(&name).output().await;
-        let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-        let detail = sources::installed::parse_pkg_detail(&text);
+        let detail = if is_flatpak {
+            let out = Command::new("flatpak")
+                .env("LC_ALL", "C")
+                .args(["info", &name])
+                .output()
+                .await;
+            let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+            sources::flatpak::parse_info(&text)
+        } else {
+            let out = Command::new("pacman").arg("-Qi").arg(&name).output().await;
+            let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+            sources::installed::parse_pkg_detail(&text)
+        };
         let _ = tx.send(AppEvent::ManageDetailLoaded { name, detail });
     });
 }

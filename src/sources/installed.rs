@@ -19,6 +19,12 @@ impl InstalledIndex {
         InstalledIndex { versions }
     }
 
+    /// Add or overwrite one entry (used to fold Flatpak app IDs into the index so
+    /// search results show installed state for Flatpak too).
+    pub fn insert(&mut self, name: String, version: String) {
+        self.versions.insert(name, version);
+    }
+
     pub fn is_installed(&self, name: &str) -> bool {
         self.versions.contains_key(name)
     }

@@ -2,19 +2,27 @@ use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 /// The Manage detail pane: `pacman -Qi` info for the highlighted installed
-/// package. Shows `loading...` until the async fetch arrives, nothing if the
-/// list is empty.
+/// package. Rendered as the right half of the Manage box, separated from the list
+/// by a single vertical divider (no box of its own). Shows `loading...` until the
+/// async fetch arrives, nothing if the list is empty.
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let pal = &app.palette;
     let border = crate::ui::border_color(app, crate::app::Focus::List);
 
+    // A left-edge divider that matches the skin (none for borderless skins).
+    let divider = Block::default()
+        .borders(app.skin.border.borders() & Borders::LEFT)
+        .border_set(app.skin.border.set())
+        .border_style(Style::default().fg(border));
+    let inner = divider.inner(area);
+    frame.render_widget(divider, area);
+    let area = inner;
+
     let Some(pkg) = app.selected_installed() else {
-        let p = Paragraph::new("").block(crate::ui::themed_block(app, border, " detail "));
-        frame.render_widget(p, area);
         return;
     };
 
@@ -54,7 +62,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let title = format!(" {} ", pkg.name);
-    let p = Paragraph::new(lines).block(crate::ui::themed_block(app, border, title));
-    frame.render_widget(p, area);
+    // Pad one column so the text does not hug the divider.
+    let body = Rect { x: area.x + 1, width: area.width.saturating_sub(1), ..area };
+    frame.render_widget(Paragraph::new(lines), body);
 }

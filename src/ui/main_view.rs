@@ -119,26 +119,30 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
         )
     };
     let cursor = crate::ui::cursor_symbol(app);
+    // One outer box titled with the list header; the list and the detail pane sit
+    // inside it as two parts separated by a vertical divider (drawn by the pane).
+    let outer = crate::ui::themed_block(app, list_border, title);
+    let inner = outer.inner(chunks[1]);
+    frame.render_widget(outer, chunks[1]);
+
     let list = List::new(items)
-        .block(crate::ui::themed_block(app, list_border, title))
         .highlight_style(crate::ui::highlight_style(app))
         .highlight_symbol(&cursor);
-
     let mut state = ListState::default();
     if !rows.is_empty() {
         state.select(Some(app.installed_selected.min(rows.len() - 1)));
     }
-    // Two-pane: list left, pacman -Qi detail right. On a narrow terminal there is
-    // no room for the pane, so the list spans the full width.
-    if chunks[1].width >= 80 {
+    // On a narrow terminal there is no room for the detail part, so the list fills
+    // the box.
+    if inner.width >= 80 {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Min(0)])
-            .split(chunks[1]);
+            .split(inner);
         frame.render_stateful_widget(list, cols[0], &mut state);
         crate::ui::manage_detail::draw(frame, app, cols[1]);
     } else {
-        frame.render_stateful_widget(list, chunks[1], &mut state);
+        frame.render_stateful_widget(list, inner, &mut state);
     }
 }
 

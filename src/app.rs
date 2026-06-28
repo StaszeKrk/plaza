@@ -43,6 +43,21 @@ pub struct FilterRow {
     pub id: FilterId,
 }
 
+/// A single setting in the Options overlay. Dispatch keys on this, not a row
+/// index, so categories and headers can be inserted without renumbering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionId {
+    ShowHotkeys,
+    Palette,
+    Skin,
+    Highlight,
+    SearchDelay,
+    CollapseRepos,
+    RemoveDepth,
+    AurHelper,
+    HideIdleFilter,
+}
+
 /// Per-view repo-filter state: the unchecked repo ids and the box cursor. Search
 /// and Manage each keep their own, so a repo hidden in one view is unaffected in
 /// the other. The box (`f`) always edits the active view's instance.
@@ -356,27 +371,54 @@ impl App {
 
     // --- Options overlay ---
 
-    /// Number of option rows.
-    pub const OPTIONS_COUNT: usize = 9;
+    /// The options menu grouped into categories. Drives both rendering and
+    /// navigation; headers are not selectable.
+    pub fn option_layout() -> &'static [(&'static str, &'static [OptionId])] {
+        use OptionId::*;
+        &[
+            ("Appearance", &[Palette, Skin, Highlight]),
+            ("Search", &[SearchDelay, CollapseRepos]),
+            ("Manage", &[RemoveDepth, AurHelper]),
+            ("Filters", &[HideIdleFilter]),
+            ("General", &[ShowHotkeys]),
+        ]
+    }
+
+    /// The selectable option ids in layout order (the cursor indexes this).
+    pub fn flat_options() -> Vec<OptionId> {
+        Self::option_layout()
+            .iter()
+            .flat_map(|(_, ids)| ids.iter().copied())
+            .collect()
+    }
+
+    /// The option under the cursor.
+    pub fn selected_option(&self) -> OptionId {
+        let flat = Self::flat_options();
+        flat[self.options_selected.min(flat.len() - 1)]
+    }
 
     pub fn move_options(&mut self, delta: i32) {
-        let max = Self::OPTIONS_COUNT as i32 - 1;
+        let max = Self::flat_options().len() as i32 - 1;
         let next = (self.options_selected as i32 + delta).clamp(0, max);
         self.options_selected = next as usize;
     }
 
     pub fn toggle_option(&mut self) {
-        match self.options_selected {
-            0 => self.settings.show_hotkeys = !self.settings.show_hotkeys,
-            1 => self.settings.collapse_repos = !self.settings.collapse_repos,
-            2 => self.cycle_palette(),
-            3 => self.cycle_skin(),
-            4 => self.settings.debounce_ms = next_debounce(self.settings.debounce_ms),
-            5 => self.settings.remove_depth = self.settings.remove_depth.next(),
-            6 => self.cycle_aur_helper(),
-            7 => self.settings.hide_idle_filter = !self.settings.hide_idle_filter,
-            8 => self.settings.highlight = self.settings.highlight.next(),
-            _ => {}
+        match self.selected_option() {
+            OptionId::ShowHotkeys => self.settings.show_hotkeys = !self.settings.show_hotkeys,
+            OptionId::CollapseRepos => self.settings.collapse_repos = !self.settings.collapse_repos,
+            OptionId::Palette => self.cycle_palette(),
+            OptionId::Skin => self.cycle_skin(),
+            OptionId::Highlight => self.settings.highlight = self.settings.highlight.next(),
+            OptionId::SearchDelay => {
+                self.settings.debounce_ms = next_debounce(self.settings.debounce_ms)
+            }
+            OptionId::RemoveDepth => self.settings.remove_depth = self.settings.remove_depth.next(),
+            OptionId::AurHelper => self.cycle_aur_helper(),
+            OptionId::HideIdleFilter => {
+                self.settings.hide_idle_filter = !self.settings.hide_idle_filter
+            }
         }
         self.settings.save();
     }
@@ -1102,8 +1144,40 @@ mod tests {
     }
 
     #[test]
-    fn options_count_matches_rows() {
-        assert_eq!(App::OPTIONS_COUNT, 9);
+    fn flat_options_has_every_id_once() {
+        let flat = App::flat_options();
+        let mut seen = flat.clone();
+        seen.sort_by_key(|o| *o as usize);
+        seen.dedup_by_key(|o| *o as usize);
+        assert_eq!(flat.len(), seen.len(), "duplicate OptionId in layout");
+        assert!(!flat.is_empty());
+    }
+
+    #[test]
+    fn move_options_clamps_to_flat_len() {
+        let mut app = App::new(vec![]);
+        app.move_options(-5);
+        assert_eq!(app.options_selected, 0);
+        app.move_options(1000);
+        assert_eq!(app.options_selected, App::flat_options().len() - 1);
+    }
+
+    #[test]
+    fn toggle_show_hotkeys_via_id() {
+        // toggle_option persists; keep it off the real ~/.config.
+        let tmp = std::env::temp_dir().join(format!("plaza-opt-test-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+        let mut app = App::with_settings(vec![], Settings::default());
+        let idx = App::flat_options()
+            .iter()
+            .position(|o| *o == OptionId::ShowHotkeys)
+            .unwrap();
+        app.options_selected = idx;
+        let before = app.settings.show_hotkeys;
+        app.toggle_option();
+        assert_ne!(app.settings.show_hotkeys, before);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::env::remove_var("XDG_CONFIG_HOME");
     }
 
     #[test]

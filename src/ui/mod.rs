@@ -1,4 +1,4 @@
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, OptionId};
 use crate::model::SourceId;
 use crate::theme::skin::{BadgeMode, HighlightMode};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -279,57 +279,59 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// The display text for one option row (checkbox/value), matching its `OptionId`.
+fn option_row_text(app: &App, id: OptionId) -> String {
+    let check = |b: bool| if b { "[x]" } else { "[ ]" };
+    match id {
+        OptionId::ShowHotkeys => {
+            format!("{} Show hotkeys in status bar", check(app.settings.show_hotkeys))
+        }
+        OptionId::CollapseRepos => {
+            format!("{} Group repos as [official]", check(app.settings.collapse_repos))
+        }
+        OptionId::Palette => format!("    Palette: {}", app.settings.palette),
+        OptionId::Skin => format!("    Skin: {}", app.settings.skin),
+        OptionId::Highlight => {
+            format!("    Highlight substrings: {}", app.settings.highlight.label())
+        }
+        OptionId::SearchDelay => format!("    Search delay: {}ms", app.settings.debounce_ms),
+        OptionId::RemoveDepth => format!("    Remove depth: {}", app.settings.remove_depth.label()),
+        OptionId::AurHelper => format!("    AUR helper: {}", aur_helper_label(app)),
+        OptionId::HideIdleFilter => {
+            format!("{} Hide filter box when not in use", check(app.settings.hide_idle_filter))
+        }
+    }
+}
+
 fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
     let sel = app.options_selected;
-    let check = |b: bool| if b { "[x]" } else { "[ ]" };
-    let row = |selected: bool, text: String| -> Line<'static> {
-        let marker = if selected {
-            cursor_symbol(app)
-        } else {
-            "  ".to_string()
-        };
-        let style = if selected {
-            highlight_style(app)
-        } else {
-            Style::default().fg(app.palette.fg)
-        };
-        Line::from(Span::styled(format!("{marker}{text}"), style))
-    };
-
-    let lines: Vec<Line> = vec![
-        row(
-            sel == 0,
-            format!("{} Show hotkeys in status bar", check(app.settings.show_hotkeys)),
-        ),
-        row(
-            sel == 1,
-            format!("{} Group repos as [official]", check(app.settings.collapse_repos)),
-        ),
-        row(sel == 2, format!("    Palette: {}", app.settings.palette)),
-        row(sel == 3, format!("    Skin: {}", app.settings.skin)),
-        row(
-            sel == 4,
-            format!("    Search delay: {}ms", app.settings.debounce_ms),
-        ),
-        row(
-            sel == 5,
-            format!("    Remove depth: {}", app.settings.remove_depth.label()),
-        ),
-        row(sel == 6, format!("    AUR helper: {}", aur_helper_label(app))),
-        row(
-            sel == 7,
-            format!("{} Hide filter box when not in use", check(app.settings.hide_idle_filter)),
-        ),
-        row(
-            sel == 8,
-            format!("    Highlight substrings: {}", app.settings.highlight.label()),
-        ),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  \u{2191}\u{2193} move \u{b7} space toggle/cycle \u{b7} esc close",
+    let mut lines: Vec<Line> = Vec::new();
+    let mut i = 0usize; // running selectable-row index, matching flat_options order
+    for (cat, ids) in App::option_layout() {
+        lines.push(Line::from(Span::styled(
+            format!(" {cat}"),
             Style::default().fg(app.palette.muted),
-        )),
-    ];
+        )));
+        for id in *ids {
+            let selected = i == sel;
+            let marker = if selected { cursor_symbol(app) } else { "  ".to_string() };
+            let style = if selected {
+                highlight_style(app)
+            } else {
+                Style::default().fg(app.palette.fg)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{marker}{}", option_row_text(app, *id)),
+                style,
+            )));
+            i += 1;
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  \u{2191}\u{2193} move \u{b7} space toggle/cycle \u{b7} esc close",
+        Style::default().fg(app.palette.muted),
+    )));
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = centered_rect(46, height, area);

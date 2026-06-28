@@ -548,11 +548,13 @@ async fn fetch_detail(
         }
         SourceId::Flatpak => {
             // `name` is the app ID here (the provider target). `repo` is the
-            // remote. `--user --cached` keeps it local and prompt-free.
+            // remote. Networked (not `--cached`): the cached form omits size and
+            // date, so it gives no usable detail. Same class as the AUR info RPC.
+            // `--user` disambiguates a remote that exists in both installations.
             let remote = repo.unwrap_or("flathub");
             let out = Command::new("flatpak")
                 .env("LC_ALL", "C")
-                .args(["remote-info", "--user", "--cached", remote, name])
+                .args(["remote-info", "--user", remote, name])
                 .output()
                 .await
                 .ok()?;

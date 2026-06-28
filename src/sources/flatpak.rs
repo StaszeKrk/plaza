@@ -75,19 +75,24 @@ pub fn parse_search_output(out: &str) -> Vec<PackageHit> {
         .collect()
 }
 
-/// Parse `flatpak remote-info --user --cached <remote> <app-id>` output. It is a
-/// block of `Key: value` lines. The cached form carries License and Version but
-/// not URL or install size, so those stay `None`.
+/// Parse `flatpak remote-info --user <remote> <app-id>` output: a block of
+/// `Key: value` lines (the networked form, which carries Installed Size and Date
+/// that the `--cached` form omits). Flatpak has no homepage or dependency list
+/// here, so those stay empty.
 pub fn parse_remote_info(out: &str) -> PackageDetail {
     let mut d = PackageDetail::default();
     for line in out.lines() {
+        // split_once on the first colon only, so a time value's colons stay in v.
         if let Some((k, v)) = line.split_once(':') {
             let (k, v) = (k.trim(), v.trim());
             if v.is_empty() {
                 continue;
             }
-            if k == "License" {
-                d.licenses = Some(v.to_string());
+            match k {
+                "License" => d.licenses = Some(v.to_string()),
+                "Installed Size" => d.install_size = Some(v.to_string()),
+                "Date" => d.build_date = Some(v.to_string()),
+                _ => {}
             }
         }
     }
@@ -146,14 +151,16 @@ junk line with no tabs\n";
         );
     }
 
-    const INFO: &str = "\nFirefox - Fast, Private & Safe Web Browser\n\n     ID: org.mozilla.firefox\n    Ref: app/org.mozilla.firefox/x86_64/stable\n   Arch: x86_64\n Branch: stable\nVersion: 152.0.3\nLicense: MPL-2.0\n\n Commit: 46ad1fe7\n";
+    const INFO: &str = "\nFirefox - Fast, Private & Safe Web Browser\n\n            ID: org.mozilla.firefox\n           Ref: app/org.mozilla.firefox/x86_64/stable\n          Arch: x86_64\n        Branch: stable\n       Version: 152.0.3\n       License: MPL-2.0\n    Collection: org.flathub.Stable\n Download Size: 122.0 MB\nInstalled Size: 325.3 MB\n       Runtime: org.freedesktop.Platform/x86_64/25.08\n\n        Commit: 46ad1fe7\n          Date: 2026-06-25 13:29:13 +0000\n";
 
     #[test]
-    fn parses_remote_info_license_only() {
+    fn parses_remote_info_size_license_and_date() {
         let d = parse_remote_info(INFO);
         assert_eq!(d.licenses.as_deref(), Some("MPL-2.0"));
-        assert!(d.url.is_none());
-        assert!(d.install_size.is_none());
+        assert_eq!(d.install_size.as_deref(), Some("325.3 MB"));
+        // first-colon split keeps the time in the value
+        assert_eq!(d.build_date.as_deref(), Some("2026-06-25 13:29:13 +0000"));
+        assert!(d.url.is_none()); // no homepage from remote-info
     }
 
     #[test]

@@ -52,12 +52,15 @@ pub fn merge(
             if row.best_description.is_empty() && !hit.description.is_empty() {
                 row.best_description = hit.description.clone();
             }
-            // Dedup per (source, repo) so a package in several pacman repos keeps a
-            // provider for each (world, extra-x86-64-v3, extra, …), in priority order.
-            let dup = row
-                .providers
-                .iter()
-                .any(|p| p.source_id == provider.source_id && p.meta.repo == provider.meta.repo);
+            // Dedup per (source, repo, target): a package in several pacman repos
+            // keeps a provider for each (world, extra-x86-64-v3, …), and a grouped
+            // row keeps a distinct provider per variant (gimp, gimp-bin, gimp-git),
+            // which all share (Aur, None) but differ by target.
+            let dup = row.providers.iter().any(|p| {
+                p.source_id == provider.source_id
+                    && p.meta.repo == provider.meta.repo
+                    && p.target == provider.target
+            });
             if !dup {
                 row.providers.push(provider);
             }
@@ -209,6 +212,24 @@ mod tests {
             .find(|p| p.source_id == SourceId::Flatpak)
             .unwrap();
         assert_eq!(fp.target, "org.gimp.GIMP"); // installs the app id, not "gimp"
+    }
+
+    #[test]
+    fn grouped_aur_variants_each_keep_a_provider() {
+        let inst = InstalledIndex::default();
+        let hits = vec![
+            fhit("gimp", SourceId::Pacman, None),
+            fhit("gimp-bin", SourceId::Aur, None),
+            fhit("gimp-git", SourceId::Aur, None),
+        ];
+        let rows = merge(hits, &inst, true);
+        assert_eq!(rows.len(), 1);
+        // All three variants survive as distinct providers despite sharing
+        // (Aur, repo=None); they differ by target.
+        let mut targets: Vec<&str> =
+            rows[0].providers.iter().map(|p| p.target.as_str()).collect();
+        targets.sort();
+        assert_eq!(targets, vec!["gimp", "gimp-bin", "gimp-git"]);
     }
 
     #[test]

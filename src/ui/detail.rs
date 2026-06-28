@@ -175,8 +175,17 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             let mut spans = vec![
                 crate::ui::badge_span(app, app.provider_badge(p), p.source_id),
                 Span::raw("  "),
-                Span::styled(format!("{:<14} ", p.version), Style::default().fg(pal.fg)),
             ];
+            // Show the provider's own target when it differs from the row label,
+            // so grouped variants (gimp-bin, gimp-git) and Flatpak app IDs are
+            // distinguishable instead of all reading as the same badge.
+            if p.target != row.name {
+                spans.push(Span::styled(format!("{} ", p.target), Style::default().fg(pal.muted)));
+            }
+            spans.push(Span::styled(
+                format!("{:<14} ", p.version),
+                Style::default().fg(pal.fg),
+            ));
             let (note, col) = if let Some(votes) = p.meta.votes {
                 let m = if p.meta.maintained { "maintained" } else { "orphaned" };
                 if p.meta.out_of_date {

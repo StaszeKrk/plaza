@@ -1,5 +1,7 @@
 # Plaza
 
+![Plaza demo](demo.gif)
+
 Plaza is a customizable and riceable terminal UI for finding, installing, and managing packages. You search
 once and it queries every package source on the system at the same time. On Arch
 that means the official repositories and the AUR. Results are merged into one list,

@@ -4,7 +4,6 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
@@ -24,49 +23,11 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// The Manage view: a scope-chip box on top (upgrade per source or All), and an
-/// installed-package list below with upgradable packages floated to the top.
+/// The Manage view: installed-package list with upgradable packages floated to
+/// the top, filtered by the search bar.
 fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
-    let scope_active = app.is_active(Focus::Scope);
-    let scope_border = crate::ui::border_color(app, Focus::Scope);
     let list_border = crate::ui::border_color(app, Focus::List);
     let pal = &app.palette;
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
-        .split(area);
-
-    // --- upgrade-scope chips: [ All N ] [ repo N ] [ aur N ] ---
-    let mut spans: Vec<Span> = Vec::new();
-    for i in 0..app.upgrade_scope_count() {
-        let chip = format!(" {} {} ", app.upgrade_scope_label(i), app.upgrade_scope_pending(i));
-        let style = if i == app.upgrade_scope_selected && scope_active {
-            crate::ui::highlight_style(app)
-        } else if i == app.upgrade_scope_selected {
-            Style::default().add_modifier(Modifier::BOLD).fg(pal.accent)
-        } else {
-            Style::default().fg(pal.muted)
-        };
-        spans.push(Span::styled(format!("[{chip}]"), style));
-        spans.push(Span::raw(" "));
-    }
-    let scope_title = if !app.settings.show_hotkeys {
-        if app.has_checkupdates {
-            " upgrade ".to_string()
-        } else {
-            " upgrade · (install pacman-contrib for live counts) ".to_string()
-        }
-    } else if app.has_checkupdates {
-        " upgrade · h/l scope · ⏎ run ".to_string()
-    } else {
-        " upgrade · h/l · ⏎ run · (install pacman-contrib for live counts) ".to_string()
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(spans))
-            .block(crate::ui::themed_block(app, scope_border, scope_title)),
-        chunks[0],
-    );
 
     // --- installed list (updates floated to top, filtered by the search bar) ---
     let rows = app.manage_rows();
@@ -122,8 +83,8 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     // One outer box titled with the list header; the list and the detail pane sit
     // inside it as two parts separated by a vertical divider (drawn by the pane).
     let outer = crate::ui::themed_block(app, list_border, title);
-    let inner = outer.inner(chunks[1]);
-    frame.render_widget(outer, chunks[1]);
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
 
     let list = List::new(items)
         .highlight_style(crate::ui::highlight_style(app))

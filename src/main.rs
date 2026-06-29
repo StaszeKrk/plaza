@@ -723,7 +723,6 @@ fn handle_interact_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEve
         Focus::Search => interact_search(app, key, tx),
         Focus::Sidebar => interact_sidebar(app, key, tx),
         Focus::Main => interact_main(app, key, tx),
-        Focus::Scope => interact_scope(app, key),
         Focus::List => interact_list(app, key),
         Focus::Filter => interact_filter(app, key),
         Focus::TaskPane => {} // the task pane owns input via handle_task_pane_key
@@ -968,17 +967,6 @@ fn interact_main(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
             KeyCode::Esc => app.main_view = MainView::Results, // back to results
             _ => {}
         },
-    }
-}
-
-/// Interact: the Manage upgrade-scope chips. h/l pick a scope, Enter runs it.
-fn interact_scope(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Left | KeyCode::Char('h') => app.move_upgrade_scope(-1),
-        KeyCode::Right | KeyCode::Char('l') => app.move_upgrade_scope(1),
-        KeyCode::Enter => request_upgrade(app),
-        KeyCode::Esc => app.interacting = false,
-        _ => {}
     }
 }
 

@@ -14,13 +14,12 @@ use crate::theme::{self, palette::Palette, skin::Skin};
 use std::time::SystemTime;
 
 /// A focusable panel. In the Search view the content panel is `Main`; in the
-/// Manage view it splits into `Scope` (upgrade chips) and `List` (installed).
+/// Manage view the content is the installed `List`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Search,
     Sidebar,
     Main,
-    Scope,
     List,
     Filter,
     TaskPane,
@@ -544,7 +543,7 @@ impl App {
     pub fn content_top(&self) -> Focus {
         match self.active_view {
             ActiveView::Search => Focus::Main,
-            ActiveView::Manage => Focus::Scope,
+            ActiveView::Manage => Focus::List,
         }
     }
 
@@ -557,7 +556,7 @@ impl App {
     }
 
     /// Move the hovered panel (navigate mode). Layout: Search on top, Sidebar on
-    /// the left, content on the right (Manage splits into Scope over List).
+    /// the left, content on the right.
     pub fn hover_move(&mut self, dir: Dir) {
         let top = self.content_top();
         let next = match (self.focus, dir) {
@@ -575,12 +574,7 @@ impl App {
             (Focus::Main, Dir::Left) => Focus::Sidebar,
             (Focus::Main, Dir::Right) if self.task_pane_visible() => Focus::TaskPane,
 
-            (Focus::Scope, Dir::Up) => Focus::Search,
-            (Focus::Scope, Dir::Left) => Focus::Sidebar,
-            (Focus::Scope, Dir::Down) => Focus::List,
-            (Focus::Scope, Dir::Right) if self.task_pane_visible() => Focus::TaskPane,
-
-            (Focus::List, Dir::Up) => Focus::Scope,
+            (Focus::List, Dir::Up) => Focus::Search,
             (Focus::List, Dir::Left) => Focus::Sidebar,
             (Focus::List, Dir::Right) if self.task_pane_visible() => Focus::TaskPane,
 
@@ -588,6 +582,10 @@ impl App {
 
             (f, _) => f,
         };
+        // Entering the sidebar defaults the cursor to the current view's row.
+        if next == Focus::Sidebar && self.focus != Focus::Sidebar {
+            self.sidebar_selected = self.sidebar_view_row(self.active_view);
+        }
         self.focus = next;
     }
 
@@ -1144,12 +1142,6 @@ impl App {
         1 + self.source_status.len()
     }
 
-    /// Move the selected scope chip, clamped to the chip range.
-    pub fn move_upgrade_scope(&mut self, delta: i32) {
-        self.upgrade_scope_selected =
-            clamp_index(self.upgrade_scope_selected, delta, self.upgrade_scope_count());
-    }
-
     /// Label for scope chip `i` (0 = "All", else the source badge).
     pub fn upgrade_scope_label(&self, i: usize) -> &'static str {
         match i {
@@ -1419,15 +1411,13 @@ mod tests {
         assert_eq!(app.focus, Focus::Sidebar);
         app.hover_move(Dir::Up);
         assert_eq!(app.focus, Focus::Search);
-        // Manage view: Search → Scope → List
+        // Manage view: Search → List
         app.active_view = ActiveView::Manage;
         app.focus = Focus::Search;
         app.hover_move(Dir::Down);
-        assert_eq!(app.focus, Focus::Scope);
-        app.hover_move(Dir::Down);
         assert_eq!(app.focus, Focus::List);
         app.hover_move(Dir::Up);
-        assert_eq!(app.focus, Focus::Scope);
+        assert_eq!(app.focus, Focus::Search);
     }
 
     #[test]

@@ -73,7 +73,6 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                     MainView::Results => "↑↓ move · ⏎ detail · esc back",
                     MainView::Detail => "↑↓ source · ⏎ install · esc results",
                 },
-                Focus::Scope => "h/l scope · ⏎ upgrade · esc back",
                 Focus::List => "↑↓ move · ⏎/r remove · u upgrade · esc back",
                 Focus::Filter => "↑↓ move · space toggle · s save default · f/esc close",
                 Focus::TaskPane => "task pane · `=collapse",

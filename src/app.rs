@@ -465,9 +465,8 @@ impl App {
         }
     }
 
-    /// Badge label for a provider, honoring `collapse_repos` (pacman → "official").
-    /// One source badge for a grouped row: its label, source, and how many
-    /// providers share that label.
+    /// Ordered source badges for a row: each distinct badge label once, with the
+    /// number of providers sharing it (so three AUR variants give `aur` count 3).
     pub fn badge_groups(&self, row: &PackageRow) -> Vec<BadgeGroup> {
         let mut groups: Vec<BadgeGroup> = Vec::new();
         for p in self.effective_providers(row) {
@@ -480,6 +479,7 @@ impl App {
         groups
     }
 
+    /// Badge label for a provider, honoring `collapse_repos` (pacman → "official").
     pub fn provider_badge<'a>(&self, p: &'a Provider) -> &'a str {
         if self.settings.collapse_repos && p.source_id == SourceId::Pacman {
             "official"

@@ -4,13 +4,14 @@ use std::collections::HashMap;
 
 /// Merge hits from all sources into rows, keyed by a layered match key: a hit's
 /// canonical ID when present, else its normalized name (lowercased, trimmed,
-/// with a trailing `-bin`/`-git` stripped when `group_variants` is on).
+/// with a trailing `-bin`/`-git` stripped when `stack_variants` is on).
 ///
 /// Processed in three rounds so the key is order-independent: base names first,
 /// then stripped variants (which join an existing base bucket, else stand
-/// alone), then Flatpak hits (which bridge onto an existing repo/AUR bucket by
-/// their normalized human name when grouping is on, else stand alone in their
-/// own app-ID bucket). The row label is the shortest raw name in the bucket.
+/// alone) when `stack_variants` is on, then Flatpak hits (which bridge onto an
+/// existing repo/AUR bucket by their normalized human name when `group_flatpak`
+/// is on, else stand alone in their own app-ID bucket). The row label is the
+/// shortest raw name in the bucket.
 pub fn merge(
     hits: Vec<PackageHit>,
     installed: &InstalledIndex,

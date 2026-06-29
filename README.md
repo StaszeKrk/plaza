@@ -38,7 +38,11 @@ Manage:
 
 - Lists every installed package with its origin repo (or `aur`), filterable by
   typing.
-- Floats packages with a pending update to the top, marked with the new version.
+- Sorts the list by name, size, or updated (last install/upgrade) from the filter
+  box (`f`) `sort` section. The active key shows a direction arrow; pick it again
+  to flip ascending/descending. A `float updates to top` checkbox (on by default)
+  keeps upgradable packages above the sorted order. Upgradable packages are marked
+  with the new version. Size and dates cover pacman and Flatpak packages.
 - Removes the selected package at a configurable depth (`-Rs` by default, also
   `-Rns` or `-R`, set in options).
 - Upgrades per source or all at once from the sidebar `UPDATES/INSTALLED` block:
@@ -54,14 +58,17 @@ Manage:
   moves. The pane hides on narrow terminals.
 - Filters the list by installation reason from the filter box (`f`): all,
   explicitly installed only, or orphans (dependencies nothing requires,
-  `pacman -Qdt`). Save the current choice as the launch default with `s`.
+  `pacman -Qdt`). The box's `sort` section sets the key, direction, and the float
+  toggle. Save the current reason, sort, and filter choices as the launch default
+  with `s`.
 
 General:
 
 - Filters either list by repository. Press `f` for a checkbox box in the sidebar
   to show only the repos you pick (toggle one repo, all pacman repos at once, or
   the AUR). In the Manage view the box also has a reason section (all, explicit,
-  orphans). It follows the collapse-repos option. By default the box appears only
+  orphans) and a sort section (name, size, updated, plus float-updates). It
+  follows the collapse-repos option. By default the box appears only
   while you are in it or while a filter is active; turn off "hide filter box when
   not in use" in options to keep it on screen at all times. Search and Manage
   keep separate filters, so hiding a repo in one view does not affect the other.
@@ -138,7 +145,7 @@ Plaza has two modes, like a tiling layout you tab around:
 | Tab | switch between the Search and Manage views |
 | / | jump to the search bar from anywhere |
 | f | open or close the repository filter; Space toggles a checkbox |
-| s (in the filter box) | save the current view's filter (repos, and reason in Manage) as its launch default |
+| s (in the filter box) | save the current view's filter (repos, plus reason and sort in Manage) as its launch default |
 | Enter (on a result) | open it, then Enter on a source to install |
 | r (in Manage list) | remove the selected package |
 | Enter (in Manage list) | upgrade the package if it has a pending update, else remove it |

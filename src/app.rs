@@ -3,7 +3,7 @@ use crate::config::Settings;
 use crate::model::{
     chain_commands, remove_command, remove_command_flatpak, source_upgrade_command,
     upgrade_one_command, Action, ActionSpec, InstalledStats, PackageDetail, PackageHit, PackageRow,
-    Provider, SourceId, UpdatesInfo,
+    Provider, SortDir, SortKey, SourceId, UpdatesInfo,
 };
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -156,6 +156,54 @@ fn clamp_index(cur: usize, delta: i32, len: usize) -> usize {
     (cur as i32 + delta).clamp(0, max) as usize
 }
 
+/// Case-insensitive name order (display, then exact name), always ascending.
+/// Used as the primary order for the Name key and as the stable tiebreak for
+/// every key.
+fn name_cmp(a: &InstalledPkg, b: &InstalledPkg) -> std::cmp::Ordering {
+    a.display
+        .to_ascii_lowercase()
+        .cmp(&b.display.to_ascii_lowercase())
+        .then_with(|| a.name.cmp(&b.name))
+}
+
+/// Order two optional values per `dir`, with known values always before unknown
+/// ones (a `None` sorts last in either direction, so unresolved size/date rows
+/// collect at the end instead of jumping to the top under descending).
+fn opt_cmp<T: Ord>(a: Option<T>, b: Option<T>, dir: SortDir) -> std::cmp::Ordering {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    match (a, b) {
+        (Some(x), Some(y)) => {
+            let o = x.cmp(&y);
+            if dir == SortDir::Desc {
+                o.reverse()
+            } else {
+                o
+            }
+        }
+        (Some(_), None) => Less,
+        (None, Some(_)) => Greater,
+        (None, None) => Equal,
+    }
+}
+
+/// Compare two installed packages by the chosen key+direction, falling back to
+/// ascending name for a stable, predictable order on ties.
+fn key_cmp(a: &InstalledPkg, b: &InstalledPkg, key: SortKey, dir: SortDir) -> std::cmp::Ordering {
+    let primary = match key {
+        SortKey::Name => {
+            let o = name_cmp(a, b);
+            if dir == SortDir::Desc {
+                o.reverse()
+            } else {
+                o
+            }
+        }
+        SortKey::Size => opt_cmp(a.size, b.size, dir),
+        SortKey::Updated => opt_cmp(a.install_date, b.install_date, dir),
+    };
+    primary.then_with(|| name_cmp(a, b))
+}
+
 /// Visibility of the background-task (install) pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskView {
@@ -204,6 +252,11 @@ pub struct App {
     /// Manage installation-reason filter (All/Explicit/Orphans). Seeded from
     /// `settings.default_reason`, cycled with `e`.
     pub manage_reason: crate::model::ReasonFilter,
+    /// Manage list sort key/direction and whether upgradable packages float to
+    /// the top. All seeded from settings and persisted by "save as default".
+    pub manage_sort_key: crate::model::SortKey,
+    pub manage_sort_dir: crate::model::SortDir,
+    pub manage_float_updates: bool,
     /// Cached `pacman -Qi` detail per installed package name, with in-flight
     /// names tracked so the same fetch is not spawned twice while scrolling.
     pub manage_detail: HashMap<String, crate::sources::installed::PkgDetail>,
@@ -323,6 +376,9 @@ impl App {
             installed_selected: 0,
             manage_filter: String::new(),
             manage_reason: settings.default_reason,
+            manage_sort_key: settings.default_manage_sort_key,
+            manage_sort_dir: settings.default_manage_sort_dir,
+            manage_float_updates: settings.default_manage_float_updates,
             manage_detail: HashMap::new(),
             manage_detail_inflight: HashSet::new(),
             search_filter,
@@ -796,23 +852,48 @@ impl App {
                 crate::model::ReasonFilter::Orphans => p.orphan,
             })
             .collect();
+        let key = self.manage_sort_key;
+        let dir = self.manage_sort_dir;
+        let float = self.manage_float_updates;
         rows.sort_by(|a, b| {
             let (au, bu) = (updates.contains(a.name.as_str()), updates.contains(b.name.as_str()));
             if q.is_empty() {
-                // No filter: float upgradable packages up, then alphabetical.
-                bu.cmp(&au).then_with(|| a.name.cmp(&b.name))
+                // No filter: optionally float upgradable packages up, then sort by
+                // the chosen key+direction.
+                if float {
+                    bu.cmp(&au).then_with(|| key_cmp(a, b, key, dir))
+                } else {
+                    key_cmp(a, b, key, dir)
+                }
             } else {
                 // Filtering: match quality (exact > prefix > substring) wins over the
                 // upgradable float, so typing a name surfaces it even if something
-                // upgradable also matches. Upgradable breaks ties within a rank.
+                // upgradable also matches. The chosen sort breaks ties within a rank.
                 rank(&q, &a.name)
                     .cmp(&rank(&q, &b.name))
                     .then_with(|| bu.cmp(&au))
+                    .then_with(|| key_cmp(a, b, key, dir))
                     .then_with(|| a.name.len().cmp(&b.name.len()))
                     .then_with(|| a.name.cmp(&b.name))
             }
         });
         rows
+    }
+
+    /// Choose the Manage sort key. Selecting a new key applies that key's default
+    /// direction; selecting the key already active flips the direction.
+    pub fn select_sort(&mut self, key: SortKey) {
+        if self.manage_sort_key == key {
+            self.manage_sort_dir = self.manage_sort_dir.flip();
+        } else {
+            self.manage_sort_key = key;
+            self.manage_sort_dir = key.default_dir();
+        }
+    }
+
+    /// Toggle whether upgradable packages float to the top of the Manage list.
+    pub fn toggle_float_updates(&mut self) {
+        self.manage_float_updates = !self.manage_float_updates;
     }
 
     /// The label shown for an installed package in the Manage list: the human
@@ -1244,6 +1325,84 @@ mod tests {
 
     fn ipkg(name: &str) -> InstalledPkg {
         InstalledPkg { name: name.into(), version: "1".into(), origin: "repo".into(), ..Default::default() }
+    }
+
+    fn ipkg_meta(name: &str, size: Option<u64>, date: Option<i64>) -> InstalledPkg {
+        InstalledPkg {
+            name: name.into(),
+            display: name.into(),
+            size,
+            install_date: date,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn select_sort_sets_default_dir_then_flips() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        assert_eq!(app.manage_sort_key, SortKey::Name);
+        app.select_sort(SortKey::Size);
+        assert_eq!(app.manage_sort_key, SortKey::Size);
+        assert_eq!(app.manage_sort_dir, SortDir::Desc); // size default
+        app.select_sort(SortKey::Size); // same key flips
+        assert_eq!(app.manage_sort_dir, SortDir::Asc);
+        app.select_sort(SortKey::Name); // new key -> its default
+        assert_eq!(app.manage_sort_dir, SortDir::Asc);
+    }
+
+    #[test]
+    fn manage_rows_sorts_by_size_and_puts_none_last() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.installed_list = vec![
+            ipkg_meta("a", Some(10), None),
+            ipkg_meta("b", Some(300), None),
+            ipkg_meta("c", None, None),
+            ipkg_meta("d", Some(50), None),
+        ];
+        app.manage_float_updates = false;
+        app.manage_sort_key = SortKey::Size;
+        app.manage_sort_dir = SortDir::Desc;
+        let order: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(order, vec!["b", "d", "a", "c"]);
+        app.manage_sort_dir = SortDir::Asc;
+        let order: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(order, vec!["a", "d", "b", "c"]); // None still last
+    }
+
+    #[test]
+    fn manage_rows_float_updates_overrides_sort() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.installed_list =
+            vec![ipkg_meta("a", Some(10), None), ipkg_meta("b", Some(300), None)];
+        app.updates_list = vec![UpdateEntry {
+            name: "a".into(),
+            old_version: "1".into(),
+            new_version: "2".into(),
+            source_id: SourceId::Pacman,
+        }];
+        app.manage_sort_key = SortKey::Size;
+        app.manage_sort_dir = SortDir::Desc;
+        app.manage_float_updates = true;
+        let order: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(order, vec!["a", "b"]); // upgradable 'a' floats above larger 'b'
+    }
+
+    #[test]
+    fn manage_rows_name_sort_is_case_insensitive_both_dirs() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.installed_list = vec![ipkg_meta("Bravo", None, None), ipkg_meta("alpha", None, None)];
+        app.manage_float_updates = false;
+        app.manage_sort_key = SortKey::Name;
+        app.manage_sort_dir = SortDir::Asc;
+        assert_eq!(
+            app.manage_rows().iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "Bravo"]
+        );
+        app.manage_sort_dir = SortDir::Desc;
+        assert_eq!(
+            app.manage_rows().iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["Bravo", "alpha"]
+        );
     }
 
     #[test]

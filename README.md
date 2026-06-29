@@ -25,8 +25,13 @@ Search:
   Flatpak into a single row, so you pick the edition from the detail view.
   Matching uses the Flatpak app ID, then a normalized name, so a Flatpak whose
   app name matches a repo package joins its row (multi-word app names stay on
-  their own to avoid wrong merges). Turn it off with the "Group name variants and
-  Flatpak" option to get one row per exact name.
+  their own to avoid wrong merges). Two independent options control this: "Stack
+  package variants" (the `-bin`/`-git` family) and "Group matching Flatpak"; turn
+  either off for one row per exact name.
+- A grouped row shows one badge per source. When several variants share a source,
+  the "Variant badge" option renders them as a count (`aur ×3`, the default) or
+  repeated (`aur aur aur`). Badges carry the skin's per-source icon
+  (repo/aur/flatpak) when icons are enabled.
 - Shows every repo or source that provides a package, with versions and what is
   already installed. The repo pacman installs from by default is marked.
 - Can install from a specific repo instead of the default.
@@ -40,9 +45,10 @@ Manage:
   typing.
 - Sorts the list by name, size, or updated (last install/upgrade) from the filter
   box (`f`) `sort` section. The active key shows a direction arrow; pick it again
-  to flip ascending/descending. A `float updates to top` checkbox (on by default)
-  keeps upgradable packages above the sorted order. Upgradable packages are marked
-  with the new version. Size and dates cover pacman and Flatpak packages.
+  to flip ascending/descending. The "Float upgradable to top" option (on by
+  default, in the options menu) keeps upgradable packages above the sorted order.
+  Upgradable packages are marked with the new version. Size and dates cover pacman
+  and Flatpak packages.
 - Removes the selected package at a configurable depth (`-Rs` by default, also
   `-Rns` or `-R`, set in options).
 - Upgrades per source or all at once from the sidebar `UPDATES/INSTALLED` block:
@@ -58,16 +64,15 @@ Manage:
   moves. The pane hides on narrow terminals.
 - Filters the list by installation reason from the filter box (`f`): all,
   explicitly installed only, or orphans (dependencies nothing requires,
-  `pacman -Qdt`). The box's `sort` section sets the key, direction, and the float
-  toggle. Save the current reason, sort, and filter choices as the launch default
-  with `s`.
+  `pacman -Qdt`). The box's `sort` section sets the key and direction. Save the
+  current reason, sort, and filter choices as the launch default with `s`.
 
 General:
 
 - Filters either list by repository. Press `f` for a checkbox box in the sidebar
   to show only the repos you pick (toggle one repo, all pacman repos at once, or
   the AUR). In the Manage view the box also has a reason section (all, explicit,
-  orphans) and a sort section (name, size, updated, plus float-updates). It
+  orphans) and a sort section (name, size, updated). It
   follows the collapse-repos option. By default the box appears only
   while you are in it or while a filter is active; turn off "hide filter box when
   not in use" in options to keep it on screen at all times. Search and Manage
@@ -87,8 +92,10 @@ General:
   Manage, Filters, General): hide the keybinding hints, collapse all repos into
   one `[official]` badge, switch the color palette and skin (see
   [Theming](#theming)), set the search delay, pick the remove depth, choose the
-  AUR helper (auto, yay, or paru), group name variants and a matching Flatpak
-  into one row, choose whether the filter box hides when it is not in use, and
+  AUR helper (auto, yay, or paru), stack package variants and group a matching
+  Flatpak (two toggles), pick the variant-badge style (count or repeat), float
+  upgradable packages to the top of the Manage list, choose whether the filter
+  box hides when it is not in use, and
   pick how the matched substring is drawn in result and Manage names (off, color,
   underline, or both). Settings are saved to `~/.config/plaza/settings.json`.
 

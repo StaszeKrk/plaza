@@ -39,6 +39,11 @@ pub enum FilterId {
     /// A Manage installation-reason choice (radio: All/Explicit/Orphans). Shown in
     /// the filter box only in the Manage view.
     Reason(crate::model::ReasonFilter),
+    /// A Manage sort-key choice (radio over Name/Size/Updated). Activating the
+    /// already-active key flips the sort direction. Manage view only.
+    Sort(crate::model::SortKey),
+    /// The "float updates to top" checkbox (Manage view only).
+    FloatUpdates,
     /// Action row: save the active view's current filter as its launch default
     /// (same as the `s` hotkey, but reachable with the cursor).
     SaveDefault,
@@ -1012,6 +1017,20 @@ impl App {
                     id: FilterId::Reason(r),
                 });
             }
+            // Sort rows (radio over the keys) plus the float-updates checkbox.
+            use crate::model::SortKey::*;
+            for k in [Name, Size, Updated] {
+                rows.push(FilterRow {
+                    label: k.label().to_string(),
+                    checked: self.manage_sort_key == k,
+                    id: FilterId::Sort(k),
+                });
+            }
+            rows.push(FilterRow {
+                label: "float updates to top".to_string(),
+                checked: self.manage_float_updates,
+                id: FilterId::FloatUpdates,
+            });
         }
         // Action row: save the current filter as the launch default.
         rows.push(FilterRow {
@@ -1054,6 +1073,8 @@ impl App {
             FilterId::Aur => self.toggle_repo_off("aur"),
             FilterId::Flatpak => self.toggle_repo_off("flatpak"),
             FilterId::Reason(r) => self.manage_reason = r, // radio: select
+            FilterId::Sort(k) => self.select_sort(k),      // radio, or flip dir
+            FilterId::FloatUpdates => self.toggle_float_updates(),
             FilterId::SaveDefault => {
                 self.save_filter_default();
                 return; // not a filter change; nothing to re-clamp
@@ -1078,6 +1099,9 @@ impl App {
             ActiveView::Manage => {
                 self.settings.default_manage_filter_off = off;
                 self.settings.default_reason = self.manage_reason;
+                self.settings.default_manage_sort_key = self.manage_sort_key;
+                self.settings.default_manage_sort_dir = self.manage_sort_dir;
+                self.settings.default_manage_float_updates = self.manage_float_updates;
                 "Manage"
             }
             _ => {
@@ -1335,6 +1359,40 @@ mod tests {
             install_date: date,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn filter_box_has_sort_rows_in_manage() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.active_view = ActiveView::Manage;
+        let rows = app.filter_checkboxes();
+        assert!(rows.iter().any(|r| r.id == FilterId::Sort(SortKey::Name)));
+        assert!(rows.iter().any(|r| r.id == FilterId::Sort(SortKey::Size)));
+        assert!(rows.iter().any(|r| r.id == FilterId::Sort(SortKey::Updated)));
+        assert!(rows.iter().any(|r| r.id == FilterId::FloatUpdates));
+        let name_row = rows.iter().find(|r| r.id == FilterId::Sort(SortKey::Name)).unwrap();
+        assert!(name_row.checked); // active key is checked
+        app.active_view = ActiveView::Search;
+        assert!(!app.filter_checkboxes().iter().any(|r| matches!(r.id, FilterId::Sort(_))));
+    }
+
+    #[test]
+    fn toggling_sort_row_selects_and_persists() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.active_view = ActiveView::Manage;
+        let idx = app
+            .filter_checkboxes()
+            .iter()
+            .position(|r| r.id == FilterId::Sort(SortKey::Size))
+            .unwrap();
+        app.active_filter_mut().selected = idx;
+        app.toggle_filter();
+        assert_eq!(app.manage_sort_key, SortKey::Size);
+        assert_eq!(app.manage_sort_dir, SortDir::Desc);
+        app.save_filter_default();
+        assert_eq!(app.settings.default_manage_sort_key, SortKey::Size);
+        assert_eq!(app.settings.default_manage_sort_dir, SortDir::Desc);
+        assert!(app.settings.default_manage_float_updates);
     }
 
     #[test]

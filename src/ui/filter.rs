@@ -16,6 +16,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let sel = app.active_filter().selected;
     let mut lines: Vec<Line> = Vec::new();
     let mut reason_header = false;
+    let mut sort_header = false;
     let mut sel_line = 0usize; // rendered line index of the cursor row (for scroll)
     for (i, row) in rows.iter().enumerate() {
         // A "reason" sub-heading once, before the first reason (radio) row.
@@ -23,6 +24,12 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(" reason", Style::default().fg(pal.muted))));
             reason_header = true;
+        }
+        // A "sort" sub-heading once, before the first sort (radio) row.
+        if matches!(row.id, FilterId::Sort(_)) && !sort_header {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(" sort", Style::default().fg(pal.muted))));
+            sort_header = true;
         }
         // The save action gets a blank separator above it.
         if matches!(row.id, FilterId::SaveDefault) {
@@ -42,18 +49,29 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             };
             Line::from(Span::styled(format!("{cursor}» {}", row.label), style))
         } else {
-            // Reasons are mutually exclusive, so show them as radios, not checkboxes.
+            // Reason and sort rows are mutually exclusive radios; others are checkboxes.
             let mark = match row.id {
-                FilterId::Reason(_) => if row.checked { "(•)" } else { "( )" },
+                FilterId::Reason(_) | FilterId::Sort(_) => if row.checked { "(•)" } else { "( )" },
                 _ => if row.checked { "[x]" } else { "[ ]" },
             };
             let indent = if matches!(row.id, FilterId::Repo(_)) { "  " } else { "" };
+            // The active sort key shows its direction (up = ascending).
+            let arrow = match row.id {
+                FilterId::Sort(k) if k == app.manage_sort_key => {
+                    if app.manage_sort_dir == crate::model::SortDir::Asc {
+                        " \u{2191}"
+                    } else {
+                        " \u{2193}"
+                    }
+                }
+                _ => "",
+            };
             let style = if selected {
                 crate::ui::highlight_style(app)
             } else {
                 Style::default().fg(pal.fg)
             };
-            Line::from(Span::styled(format!("{cursor}{mark} {indent}{}", row.label), style))
+            Line::from(Span::styled(format!("{cursor}{mark} {indent}{}{arrow}", row.label), style))
         };
         lines.push(line);
     }

@@ -142,6 +142,8 @@ pub fn parse_installed_pkgs(out: &str) -> Vec<InstalledPkg> {
                 origin: "flatpak".to_string(),
                 explicit: true,
                 orphan: false,
+                size: None,         // set from the list size column in Task 3
+                install_date: None, // set from deploy mtime in main.rs
             })
         })
         .collect()

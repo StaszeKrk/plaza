@@ -113,6 +113,50 @@ pub struct InstalledPkg {
     pub explicit: bool,
     /// In `pacman -Qdt`: a dependency nothing requires anymore (an orphan).
     pub orphan: bool,
+    /// Installed size in bytes (pacman `%SIZE%` / Flatpak list size). `None` if
+    /// unknown.
+    pub size: Option<u64>,
+    /// Last install/upgrade time, unix epoch seconds. `None` if unknown.
+    pub install_date: Option<i64>,
+}
+
+/// Parse one pacman local-db `desc` file. Each `%KEY%` header line is followed
+/// by its value on the next line(s). Returns `%NAME%`, `%SIZE%` (bytes), and
+/// `%INSTALLDATE%` (epoch); missing or non-numeric fields yield `None`.
+pub fn parse_desc(contents: &str) -> (Option<String>, Option<u64>, Option<i64>) {
+    let mut name = None;
+    let mut size = None;
+    let mut date = None;
+    let mut lines = contents.lines();
+    while let Some(line) = lines.next() {
+        match line.trim() {
+            "%NAME%" => name = lines.next().map(|l| l.trim().to_string()),
+            "%SIZE%" => size = lines.next().and_then(|l| l.trim().parse::<u64>().ok()),
+            "%INSTALLDATE%" => date = lines.next().and_then(|l| l.trim().parse::<i64>().ok()),
+            _ => {}
+        }
+    }
+    (name, size, date)
+}
+
+/// Read every `<db_dir>/*/desc` into a `name -> (size, install_date)` map. A
+/// missing or unreadable db directory yields an empty map, so sorting still
+/// works (the values just stay `None`).
+pub fn read_local_db_meta(db_dir: &std::path::Path) -> HashMap<String, (Option<u64>, Option<i64>)> {
+    let mut map = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(db_dir) else {
+        return map;
+    };
+    for entry in entries.flatten() {
+        let desc = entry.path().join("desc");
+        if let Ok(contents) = std::fs::read_to_string(&desc) {
+            let (name, size, date) = parse_desc(&contents);
+            if let Some(name) = name {
+                map.insert(name, (size, date));
+            }
+        }
+    }
+    map
 }
 
 /// Parse a quiet name-per-line listing (`pacman -Qeq` / `-Qdtq`) into a set.
@@ -181,6 +225,8 @@ pub fn parse_installed_list(
                     name: name.to_string(),
                     version,
                     origin,
+                    size: None,         // enriched from the local db in main.rs
+                    install_date: None, // enriched from the local db in main.rs
                 })
             })
             .collect()
@@ -195,6 +241,21 @@ pub fn parse_installed_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_desc_extracts_size_and_date() {
+        let s = "%NAME%\nfirefox\n\n%VERSION%\n1.0\n\n%SIZE%\n299876352\n\n%INSTALLDATE%\n1718185200\n";
+        let (n, size, date) = parse_desc(s);
+        assert_eq!(n.as_deref(), Some("firefox"));
+        assert_eq!(size, Some(299_876_352));
+        assert_eq!(date, Some(1_718_185_200));
+
+        let missing = "%NAME%\nzoxide\n";
+        let (n2, size2, date2) = parse_desc(missing);
+        assert_eq!(n2.as_deref(), Some("zoxide"));
+        assert_eq!(size2, None);
+        assert_eq!(date2, None);
+    }
 
     #[test]
     fn builds_index_from_pacman_q() {

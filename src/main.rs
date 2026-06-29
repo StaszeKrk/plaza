@@ -468,7 +468,7 @@ async fn run_count(args: &[&str]) -> usize {
 async fn flatpak_list_text() -> String {
     Command::new("flatpak")
         .env("LC_ALL", "C")
-        .args(["list", "--app", "--columns=application,name,version"])
+        .args(["list", "--app", "--columns=application,name,version,size"])
         .output()
         .await
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())

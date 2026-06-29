@@ -121,10 +121,34 @@ pub fn parse_installed(out: &str) -> Vec<(String, String)> {
 }
 
 /// Build Manage-view rows from
-/// `flatpak list --app --columns=application,name,version` (tab-separated). The
-/// app ID is the row name (remove/upgrade target it directly); the human name is
-/// the display label; origin is "flatpak" (drives the filter and remove
-/// routing). Flatpak apps are explicitly installed and never orphans.
+/// `flatpak list --app --columns=application,name,version,size` (tab-separated).
+/// The app ID is the row name (remove/upgrade target it directly); the human name
+/// is the display label; origin is "flatpak" (drives the filter and remove
+/// routing). The size column is parsed to bytes. Flatpak apps are explicitly
+/// installed and never orphans; the install date is filled from the deploy dir.
+/// Parse a Flatpak human-readable size ("4.4 MB", "512 kB", "100 MiB", "123
+/// bytes") to bytes, best-effort. SI units (kB/MB/GB) are 1000-based, IEC
+/// (KiB/MiB/GiB) 1024-based. Anything unrecognized yields `None`.
+pub fn parse_human_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let split = s.find(|c: char| c.is_alphabetic())?;
+    let (num, unit) = (s[..split].trim(), s[split..].trim());
+    let value: f64 = num.parse().ok()?;
+    let mult: f64 = match unit.to_ascii_lowercase().as_str() {
+        "b" | "byte" | "bytes" => 1.0,
+        "kb" => 1e3,
+        "mb" => 1e6,
+        "gb" => 1e9,
+        "tb" => 1e12,
+        "kib" => 1024.0,
+        "mib" => 1024f64.powi(2),
+        "gib" => 1024f64.powi(3),
+        "tib" => 1024f64.powi(4),
+        _ => return None,
+    };
+    Some((value * mult).round() as u64)
+}
+
 pub fn parse_installed_pkgs(out: &str) -> Vec<InstalledPkg> {
     out.lines()
         .filter_map(|line| {
@@ -135,6 +159,7 @@ pub fn parse_installed_pkgs(out: &str) -> Vec<InstalledPkg> {
             }
             let display = cols.next().unwrap_or("").trim();
             let version = cols.next().unwrap_or("").trim();
+            let size = cols.next().and_then(parse_human_size);
             Some(InstalledPkg {
                 name: id.to_string(),
                 display: if display.is_empty() { id.to_string() } else { display.to_string() },
@@ -142,7 +167,7 @@ pub fn parse_installed_pkgs(out: &str) -> Vec<InstalledPkg> {
                 origin: "flatpak".to_string(),
                 explicit: true,
                 orphan: false,
-                size: None,         // set from the list size column in Task 3
+                size,
                 install_date: None, // set from deploy mtime in main.rs
             })
         })
@@ -196,6 +221,26 @@ pub fn parse_updates(out: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_human_size() {
+        assert_eq!(parse_human_size("123 bytes"), Some(123));
+        assert_eq!(parse_human_size("512 kB"), Some(512_000));
+        assert_eq!(parse_human_size("4.4 MB"), Some(4_400_000));
+        assert_eq!(parse_human_size("1.2 GB"), Some(1_200_000_000));
+        assert_eq!(parse_human_size("100 MiB"), Some(104_857_600));
+        assert_eq!(parse_human_size("garbage"), None);
+        assert_eq!(parse_human_size(""), None);
+    }
+
+    #[test]
+    fn installed_pkgs_capture_size_column() {
+        let out = "org.gimp.GIMP\tGIMP\t2.10\t1.2 GB\n";
+        let pkgs = parse_installed_pkgs(out);
+        assert_eq!(pkgs[0].size, Some(1_200_000_000));
+        let out2 = "org.x.Y\tY\t1.0\n";
+        assert_eq!(parse_installed_pkgs(out2)[0].size, None);
+    }
 
     const SEARCH: &str = "Firefox\tFast, Private & Safe Web Browser\torg.mozilla.firefox\t152.0.3\tstable\tflathub\n\
 Nvidia VAAPI driver\tVA-API implementation\torg.freedesktop.Platform.VAAPI.nvidia\t\t25.08\tflathub\n\

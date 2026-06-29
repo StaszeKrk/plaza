@@ -59,7 +59,7 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
                 "flatpak" => ("flatpak", SourceId::Flatpak),
                 _ => ("official", SourceId::Pacman),
             };
-            spans.push(crate::ui::badge_span(app, label, src));
+            spans.push(crate::ui::badge_span(app, label, src, 1));
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -139,9 +139,19 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
                 app.settings.highlight,
                 pal.accent,
             ));
-            for prov in &shown {
-                spans.push(crate::ui::badge_span(app, app.provider_badge(prov), prov.source_id));
-                spans.push(Span::raw(" "));
+            for g in app.badge_groups(row) {
+                match app.settings.variant_badge {
+                    crate::model::VariantBadge::Count => {
+                        spans.push(crate::ui::badge_span(app, &g.label, g.source_id, g.count));
+                        spans.push(Span::raw(" "));
+                    }
+                    crate::model::VariantBadge::Repeat => {
+                        for _ in 0..g.count {
+                            spans.push(crate::ui::badge_span(app, &g.label, g.source_id, 1));
+                            spans.push(Span::raw(" "));
+                        }
+                    }
+                }
             }
             spans.push(Span::styled(ver.to_string(), Style::default().fg(pal.muted)));
             if row.any_installed() {

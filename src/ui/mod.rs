@@ -141,19 +141,38 @@ pub fn cursor_symbol(app: &App) -> String {
     format!("{c} ")
 }
 
-/// A colored source badge rendered per the skin's badge mode.
-pub fn badge_span(app: &App, label: &str, source: SourceId) -> Span<'static> {
+/// The skin glyph for a source's badge (when icons are enabled), else "". One
+/// match arm per source, so a new source just adds an arm.
+pub fn source_icon(app: &App, source: SourceId) -> &str {
+    if !app.skin.icons.enabled {
+        return "";
+    }
+    match source {
+        SourceId::Pacman => &app.skin.icons.repo,
+        SourceId::Aur => &app.skin.icons.aur,
+        SourceId::Flatpak => &app.skin.icons.flatpak,
+    }
+}
+
+/// A colored source badge rendered per the skin's badge mode, prefixed with the
+/// source icon and suffixed with a `×N` multiplier when `count > 1`.
+pub fn badge_span(app: &App, label: &str, source: SourceId, count: usize) -> Span<'static> {
     let color = match source {
         SourceId::Aur => app.palette.badge_aur,
         SourceId::Flatpak => app.palette.badge_flatpak,
         SourceId::Pacman if app.settings.collapse_repos => app.palette.badge_official,
         SourceId::Pacman => app.palette.badge_repo,
     };
+    let icon = source_icon(app, source);
+    let icon = if icon.is_empty() { String::new() } else { format!("{icon} ") };
+    let mult = if count > 1 { format!(" \u{00d7}{count}") } else { String::new() };
     match app.skin.badge {
-        BadgeMode::Brackets => Span::styled(format!("[{label}]"), Style::default().fg(color)),
-        BadgeMode::Bare => Span::styled(label.to_string(), Style::default().fg(color)),
+        BadgeMode::Brackets => {
+            Span::styled(format!("[{icon}{label}{mult}]"), Style::default().fg(color))
+        }
+        BadgeMode::Bare => Span::styled(format!("{icon}{label}{mult}"), Style::default().fg(color)),
         BadgeMode::Chip => Span::styled(
-            format!(" {label} "),
+            format!(" {icon}{label}{mult} "),
             Style::default().fg(app.palette.highlight_fg).bg(color),
         ),
     }
@@ -386,6 +405,16 @@ mod tests {
     use crate::config::Settings;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    #[test]
+    fn source_icon_maps_each_source_and_respects_enabled() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        assert_eq!(source_icon(&app, SourceId::Pacman), app.skin.icons.repo);
+        assert_eq!(source_icon(&app, SourceId::Aur), app.skin.icons.aur);
+        assert_eq!(source_icon(&app, SourceId::Flatpak), app.skin.icons.flatpak);
+        app.skin.icons.enabled = false;
+        assert_eq!(source_icon(&app, SourceId::Aur), "");
+    }
 
     // Render the whole UI into an in-memory buffer and return its text. Proves
     // the draw path runs without panicking under the new theming.

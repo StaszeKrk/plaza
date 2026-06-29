@@ -185,7 +185,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, p)| {
             let mut spans = vec![
-                crate::ui::badge_span(app, app.provider_badge(p), p.source_id),
+                crate::ui::badge_span(app, app.provider_badge(p), p.source_id, 1),
                 Span::raw("  "),
             ];
             // Show the provider's own target when it differs from the row label,

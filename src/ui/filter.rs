@@ -55,6 +55,16 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 _ => if row.checked { "[x]" } else { "[ ]" },
             };
             let indent = if matches!(row.id, FilterId::Repo(_)) { "  " } else { "" };
+            // Source rows carry their configured source icon (repo/aur/flatpak).
+            let icon = match row.id {
+                FilterId::Master | FilterId::Repo(_) => {
+                    crate::ui::source_icon(app, crate::model::SourceId::Pacman)
+                }
+                FilterId::Aur => crate::ui::source_icon(app, crate::model::SourceId::Aur),
+                FilterId::Flatpak => crate::ui::source_icon(app, crate::model::SourceId::Flatpak),
+                _ => "",
+            };
+            let icon = if icon.is_empty() { String::new() } else { format!("{icon} ") };
             // The active sort key shows its direction (up = ascending).
             let arrow = match row.id {
                 FilterId::Sort(k) if k == app.manage_sort_key => {
@@ -71,7 +81,10 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default().fg(pal.fg)
             };
-            Line::from(Span::styled(format!("{cursor}{mark} {indent}{}{arrow}", row.label), style))
+            Line::from(Span::styled(
+                format!("{cursor}{mark} {indent}{icon}{}{arrow}", row.label),
+                style,
+            ))
         };
         lines.push(line);
     }

@@ -375,9 +375,24 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
         let ordered = sources::installed::ordered_repos(&sl);
         let mut list =
             sources::installed::parse_installed_list(&native, &foreign, &repos, &explicit, &orphan);
-        // Append installed Flatpak apps (origin "flatpak"), then re-sort by name.
+        // Enrich pacman/AUR rows with size + last install/upgrade date from the
+        // local db (locale-independent integers; missing db leaves them None).
+        let meta = sources::installed::read_local_db_meta(std::path::Path::new(
+            "/var/lib/pacman/local",
+        ));
+        for pkg in list.iter_mut().filter(|p| p.origin != "flatpak") {
+            if let Some((size, date)) = meta.get(&pkg.name) {
+                pkg.size = *size;
+                pkg.install_date = *date;
+            }
+        }
+        // Append installed Flatpak apps (origin "flatpak"); size came from the
+        // list column, the date is the deploy dir mtime. Then re-sort by name.
         if flatpak {
             list.extend(sources::flatpak::parse_installed_pkgs(&flatpak_list_text().await));
+            for pkg in list.iter_mut().filter(|p| p.origin == "flatpak") {
+                pkg.install_date = flatpak_deploy_mtime(&pkg.name);
+            }
             list.sort_by(|a, b| a.name.cmp(&b.name));
         }
         let _ = tx_list.send(AppEvent::InstalledList(list, ordered));
@@ -473,6 +488,28 @@ async fn flatpak_list_text() -> String {
         .await
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()
+}
+
+/// Last install/update time of a Flatpak app as unix epoch seconds: the mtime of
+/// its active deployment dir. Tries the system then user installation roots;
+/// returns None if neither path resolves (so the row sorts last under "updated").
+fn flatpak_deploy_mtime(app_id: &str) -> Option<i64> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let roots = [
+        Some(std::path::PathBuf::from("/var/lib/flatpak")),
+        home.map(|h| h.join(".local/share/flatpak")),
+    ];
+    for root in roots.into_iter().flatten() {
+        let path = root.join("app").join(app_id).join("current/active");
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if let Ok(mtime) = meta.modified() {
+                if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
+                    return Some(dur.as_secs() as i64);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Raw repo-update output (`name old -> new` lines). Prefers `checkupdates`

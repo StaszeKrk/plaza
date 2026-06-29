@@ -41,9 +41,12 @@ Manage:
 - Floats packages with a pending update to the top, marked with the new version.
 - Removes the selected package at a configurable depth (`-Rs` by default, also
   `-Rns` or `-R`, set in options).
-- Upgrades per source or all at once. "All" chains each source in one task
-  (`sudo pacman -Syu && paru -Sua`, using whichever AUR helper you have).
-- Upgrades a single highlighted package with `u`, when it has a pending update.
+- Upgrades per source or all at once from the sidebar `UPDATES/INSTALLED` block:
+  press Enter on a source row to upgrade that source, or Enter on the `total`
+  row to upgrade all. "All" chains each source in one task (`sudo pacman -Syu &&
+  paru -Sua`, using whichever AUR helper you have). Press Enter on an upgradable
+  package in the Manage list to upgrade just that package, or `u` to jump focus
+  to the sidebar upgrade block.
 - Shows a detail pane beside the list (`pacman -Qi` for the highlighted package):
   version, install date, build date, size, install reason (explicit or
   dependency), what requires it, and what it depends on. Loaded as the selection
@@ -120,8 +123,7 @@ Plaza has two modes, like a tiling layout you tab around:
   shown with the theme's hover border color (amber in the default theme).
 - Interact: press Enter or Space to focus the highlighted panel. Its border turns
   the theme's active accent color and the arrow keys now act inside it (move the
-  selection, pick a scope, type in the search box). Press Esc to step back to
-  navigate.
+  selection, type in the search box). Press Esc to step back to navigate.
 
 ## Keys
 
@@ -137,9 +139,10 @@ Plaza has two modes, like a tiling layout you tab around:
 | f | open or close the repository filter; Space toggles a checkbox |
 | s (in the filter box) | save the current view's filter (repos, and reason in Manage) as its launch default |
 | Enter (on a result) | open it, then Enter on a source to install |
-| r, Enter (in Manage list) | remove the selected package |
-| u (in Manage list) | upgrade the selected package, if it has an update |
-| h/l then Enter (on the upgrade chips) | upgrade that scope |
+| r (in Manage list) | remove the selected package |
+| Enter (in Manage list) | upgrade the package if it has a pending update, else remove it |
+| u (in Manage list) | jump focus to the sidebar upgrade block |
+| Enter (on a sidebar upgrade row) | upgrade that source; Enter on the `total` row upgrades all |
 | backtick | open or collapse the action pane |
 | j/k, d, x (in the action pane) | move within the queue, remove the selected item, or clear it |
 | Ctrl-C in a focused action | cancel that action |

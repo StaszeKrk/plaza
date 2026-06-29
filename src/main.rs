@@ -977,15 +977,13 @@ fn interact_list(app: &mut App, key: KeyEvent) {
         KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
         KeyCode::Char('u') => jump_to_upgrade(app),
-        KeyCode::Enter if app.selected_installed().is_some() => {
-            let upgradable = app
-                .selected_installed()
-                .map(|p| app.update_for(&p.name).is_some())
-                .unwrap_or(false);
-            if upgradable {
-                request_upgrade_one(app)
-            } else {
-                request_remove(app)
+        KeyCode::Enter => {
+            if let Some(pkg) = app.selected_installed() {
+                if app.update_for(&pkg.name).is_some() {
+                    request_upgrade_one(app)
+                } else {
+                    request_remove(app)
+                }
             }
         }
         KeyCode::Char('r') if app.selected_installed().is_some() => request_remove(app),

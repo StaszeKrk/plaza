@@ -73,7 +73,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let active_idx = app.active_view.index();
     for (i, v) in views.iter().enumerate() {
         let marker = if app.sidebar_upgrade_rows() + i == app.sidebar_selected && active {
-            crate::ui::cursor_symbol(app)
+            cursor.clone()
         } else {
             "  ".to_string()
         };

@@ -1137,34 +1137,6 @@ impl App {
         self.source_status.iter().map(|(id, _)| *id).collect()
     }
 
-    /// Number of scope chips: All + one per present source.
-    pub fn upgrade_scope_count(&self) -> usize {
-        1 + self.source_status.len()
-    }
-
-    /// Label for scope chip `i` (0 = "All", else the source badge).
-    pub fn upgrade_scope_label(&self, i: usize) -> &'static str {
-        match i {
-            0 => "All",
-            n => self
-                .present_sources()
-                .get(n - 1)
-                .map(|id| id.badge())
-                .unwrap_or("?"),
-        }
-    }
-
-    /// Pending-update count for scope chip `i` (All = every pending update).
-    pub fn upgrade_scope_pending(&self, i: usize) -> usize {
-        match i {
-            0 => self.updates_list.len(),
-            n => match self.present_sources().get(n - 1) {
-                Some(id) => self.updates_list.iter().filter(|u| u.source_id == *id).count(),
-                None => 0,
-            },
-        }
-    }
-
     /// Build the upgrade spec for the selected scope chip. Chip 0 ("All") chains
     /// every present source's upgrade into one task; a source chip upgrades just
     /// that source.
@@ -1526,8 +1498,6 @@ mod tests {
     #[test]
     fn upgrade_spec_single_source_scope() {
         let mut app = app_with_yay();
-        // chips: [All, repo, aur]
-        assert_eq!(app.upgrade_scope_count(), 3);
         app.upgrade_scope_selected = 2; // aur
         let spec = app.upgrade_spec();
         assert_eq!(spec.source_id, SourceId::Aur);
@@ -1580,27 +1550,6 @@ mod tests {
         app.cycle_aur_helper();
         assert_eq!(app.settings.aur_helper, crate::model::AurHelper::Paru);
         assert_eq!(app.aur_helper_bin.as_deref(), Some("paru"));
-    }
-
-    #[test]
-    fn upgrade_scope_pending_counts_per_source() {
-        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
-        let upd = |name: &str, src| UpdateEntry {
-            name: name.into(),
-            old_version: "1".into(),
-            new_version: "2".into(),
-            source_id: src,
-        };
-        app.updates_list = vec![
-            upd("a", SourceId::Pacman),
-            upd("b", SourceId::Pacman),
-            upd("c", SourceId::Aur),
-        ];
-        assert_eq!(app.upgrade_scope_pending(0), 3); // All
-        assert_eq!(app.upgrade_scope_pending(1), 2); // repo
-        assert_eq!(app.upgrade_scope_pending(2), 1); // aur
-        assert_eq!(app.upgrade_scope_label(1), "repo");
-        assert_eq!(app.upgrade_scope_label(2), "aur");
     }
 
     fn spec(name: &str, action: Action) -> ActionSpec {
@@ -2034,7 +1983,14 @@ mod tests {
                 new_version: "2".into(),
                 source_id: SourceId::Pacman,
             },
+            UpdateEntry {
+                name: "c".into(),
+                old_version: "1".into(),
+                new_version: "2".into(),
+                source_id: SourceId::Pacman,
+            },
         ];
-        assert_eq!(app.total_updates(), Some(2));
+        // total_updates returns updates_list.len(), not the per-source field.
+        assert_eq!(app.total_updates(), Some(3));
     }
 }

@@ -41,7 +41,6 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     }
     stats.extend([
         stat("total", app.stats.total()),
-        Line::from(""),
         head("UPDATES"),
         upd_line("repo", app.updates.repo),
         upd_line("aur", app.updates.aur),

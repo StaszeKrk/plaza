@@ -39,6 +39,9 @@ pub enum FilterId {
     /// A Manage installation-reason choice (radio: All/Explicit/Orphans). Shown in
     /// the filter box only in the Manage view.
     Reason(crate::model::ReasonFilter),
+    /// Action row: save the active view's current filter as its launch default
+    /// (same as the `s` hotkey, but reachable with the cursor).
+    SaveDefault,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,13 +362,14 @@ impl App {
     /// the AUR; otherwise every repo is listed in priority order.
     pub fn effective_providers<'a>(&self, row: &'a PackageRow) -> Vec<&'a Provider> {
         if self.settings.collapse_repos {
+            // Collapse only the pacman repos to the default (highest-priority) one;
+            // keep every non-pacman provider (AUR, Flatpak, …) as-is so they are
+            // still shown, fetched for detail, and installable.
             let mut out: Vec<&Provider> = Vec::new();
             if let Some(p) = row.providers.iter().find(|p| p.source_id == SourceId::Pacman) {
                 out.push(p);
             }
-            if let Some(p) = row.providers.iter().find(|p| p.source_id == SourceId::Aur) {
-                out.push(p);
-            }
+            out.extend(row.providers.iter().filter(|p| p.source_id != SourceId::Pacman));
             out
         } else {
             row.providers.iter().collect()
@@ -846,6 +850,12 @@ impl App {
                 });
             }
         }
+        // Action row: save the current filter as the launch default.
+        rows.push(FilterRow {
+            label: "save as default".to_string(),
+            checked: false,
+            id: FilterId::SaveDefault,
+        });
         rows
     }
 
@@ -881,6 +891,10 @@ impl App {
             FilterId::Aur => self.toggle_repo_off("aur"),
             FilterId::Flatpak => self.toggle_repo_off("flatpak"),
             FilterId::Reason(r) => self.manage_reason = r, // radio: select
+            FilterId::SaveDefault => {
+                self.save_filter_default();
+                return; // not a filter change; nothing to re-clamp
+            }
         }
         self.clamp_after_filter();
     }
@@ -1758,11 +1772,14 @@ mod tests {
         let mut app = app_with_repos();
         let labels: Vec<String> =
             app.filter_checkboxes().into_iter().map(|r| r.label).collect();
-        assert_eq!(labels, vec!["all repos", "extra", "world", "multilib", "aur"]);
+        assert_eq!(
+            labels,
+            vec!["all repos", "extra", "world", "multilib", "aur", "save as default"]
+        );
         app.settings.collapse_repos = true;
         let labels: Vec<String> =
             app.filter_checkboxes().into_iter().map(|r| r.label).collect();
-        assert_eq!(labels, vec!["repo", "aur"]);
+        assert_eq!(labels, vec!["repo", "aur", "save as default"]);
     }
 
     #[test]

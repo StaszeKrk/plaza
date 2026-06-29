@@ -95,6 +95,8 @@ pub fn parse_remote_info(out: &str) -> PackageDetail {
                 "Date" => d.build_date = Some(v.to_string()),
                 // The app's Flathub page, the closest thing to a homepage link.
                 "ID" => d.repo_url = Some(format!("https://flathub.org/apps/{v}")),
+                // The runtime the app needs, shown as its one dependency line.
+                "Runtime" => d.depends = vec![v.to_string()],
                 _ => {}
             }
         }
@@ -224,6 +226,7 @@ junk line with no tabs\n";
         // first-colon split keeps the time in the value
         assert_eq!(d.build_date.as_deref(), Some("2026-06-25 13:29:13 +0000"));
         assert_eq!(d.repo_url.as_deref(), Some("https://flathub.org/apps/org.mozilla.firefox"));
+        assert_eq!(d.depends, vec!["org.freedesktop.Platform/x86_64/25.08"]);
     }
 
     #[test]

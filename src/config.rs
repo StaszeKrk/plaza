@@ -1,4 +1,6 @@
-use crate::model::{AurHelper, HighlightMode, ReasonFilter, RemoveDepth, SortDir, SortKey, SourceId};
+use crate::model::{
+    AurHelper, HighlightMode, ReasonFilter, RemoveDepth, SortDir, SortKey, SourceId, VariantBadge,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -42,6 +44,8 @@ pub struct Settings {
     /// Fold a name-matching Flatpak into the same row as its repo/AUR package.
     /// On by default; off keeps the Flatpak as its own row.
     pub group_flatpak: bool,
+    /// How repeated same-source badges render: count (`aur ×3`) or repeat.
+    pub variant_badge: VariantBadge,
     /// Sources the user has turned off. A disabled source is never detected,
     /// searched, stat-counted, or update-checked. Any source may be disabled,
     /// including all of them (honest empty state, not a blocked one).
@@ -74,6 +78,7 @@ impl Default for Settings {
             default_reason: ReasonFilter::default(),
             stack_variants: true,
             group_flatpak: true,
+            variant_badge: VariantBadge::Count,
             disabled_sources: Vec::new(),
             flatpak_app_id: false,
             default_manage_sort_key: SortKey::Name,

@@ -295,6 +295,9 @@ fn option_row_text(app: &App, id: OptionId) -> String {
         OptionId::GroupFlatpak => {
             format!("{} Group matching Flatpak", check(app.settings.group_flatpak))
         }
+        OptionId::VariantBadge => {
+            format!("    Variant badge: {}", app.settings.variant_badge.label())
+        }
         OptionId::Palette => format!("    Palette: {}", app.settings.palette),
         OptionId::Skin => format!("    Skin: {}", app.settings.skin),
         OptionId::Highlight => {

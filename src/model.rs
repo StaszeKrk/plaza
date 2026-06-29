@@ -313,9 +313,41 @@ impl SortDir {
     }
 }
 
+/// How repeated same-source badges render for a grouped row: `Count` collapses
+/// them to `aur ×3`; `Repeat` shows each badge separately (`aur aur aur`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum VariantBadge {
+    #[default]
+    Count,
+    Repeat,
+}
+
+impl VariantBadge {
+    pub fn next(self) -> VariantBadge {
+        match self {
+            VariantBadge::Count => VariantBadge::Repeat,
+            VariantBadge::Repeat => VariantBadge::Count,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            VariantBadge::Count => "count",
+            VariantBadge::Repeat => "repeat",
+        }
+    }
+}
+
 #[cfg(test)]
 mod sort_tests {
     use super::*;
+
+    #[test]
+    fn variant_badge_default_and_next() {
+        assert_eq!(VariantBadge::default(), VariantBadge::Count);
+        assert_eq!(VariantBadge::Count.next(), VariantBadge::Repeat);
+        assert_eq!(VariantBadge::Repeat.next(), VariantBadge::Count);
+        assert_eq!(VariantBadge::Count.label(), "count");
+    }
 
     #[test]
     fn sort_key_default_dir_and_label() {

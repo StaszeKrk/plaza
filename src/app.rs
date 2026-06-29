@@ -54,6 +54,15 @@ pub struct FilterRow {
     pub id: FilterId,
 }
 
+/// A source badge for a results row: its label, its source, and the number of
+/// providers sharing that label (e.g. three AUR variants -> `count == 3`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadgeGroup {
+    pub label: String,
+    pub source_id: SourceId,
+    pub count: usize,
+}
+
 /// A single setting in the Options overlay. Dispatch keys on this, not a row
 /// index, so categories and headers can be inserted without renumbering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +75,7 @@ pub enum OptionId {
     CollapseRepos,
     StackVariants,
     GroupFlatpak,
+    VariantBadge,
     RemoveDepth,
     AurHelper,
     FlatpakAppId,
@@ -456,6 +466,20 @@ impl App {
     }
 
     /// Badge label for a provider, honoring `collapse_repos` (pacman → "official").
+    /// One source badge for a grouped row: its label, source, and how many
+    /// providers share that label.
+    pub fn badge_groups(&self, row: &PackageRow) -> Vec<BadgeGroup> {
+        let mut groups: Vec<BadgeGroup> = Vec::new();
+        for p in self.effective_providers(row) {
+            let label = self.provider_badge(p).to_string();
+            match groups.iter_mut().find(|g| g.label == label) {
+                Some(g) => g.count += 1,
+                None => groups.push(BadgeGroup { label, source_id: p.source_id, count: 1 }),
+            }
+        }
+        groups
+    }
+
     pub fn provider_badge<'a>(&self, p: &'a Provider) -> &'a str {
         if self.settings.collapse_repos && p.source_id == SourceId::Pacman {
             "official"
@@ -477,7 +501,7 @@ impl App {
         use OptionId::*;
         &[
             ("Appearance", &[Palette, Skin, Highlight]),
-            ("Search", &[SearchDelay, CollapseRepos, StackVariants, GroupFlatpak]),
+            ("Search", &[SearchDelay, CollapseRepos, StackVariants, GroupFlatpak, VariantBadge]),
             ("Manage", &[RemoveDepth, AurHelper, FlatpakAppId, FloatUpdates]),
             ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
@@ -510,6 +534,9 @@ impl App {
             OptionId::CollapseRepos => self.settings.collapse_repos = !self.settings.collapse_repos,
             OptionId::StackVariants => self.settings.stack_variants = !self.settings.stack_variants,
             OptionId::GroupFlatpak => self.settings.group_flatpak = !self.settings.group_flatpak,
+            OptionId::VariantBadge => {
+                self.settings.variant_badge = self.settings.variant_badge.next()
+            }
             OptionId::FlatpakAppId => self.settings.flatpak_app_id = !self.settings.flatpak_app_id,
             OptionId::FloatUpdates => {
                 self.manage_float_updates = !self.manage_float_updates;
@@ -1886,6 +1913,24 @@ mod tests {
 
     fn row_with(name: &str, providers: Vec<Provider>) -> PackageRow {
         PackageRow { name: name.into(), providers, best_description: String::new() }
+    }
+
+    #[test]
+    fn badge_groups_collapses_same_label_runs() {
+        let app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        let row = row_with(
+            "cork-rs",
+            vec![
+                prov(SourceId::Pacman, "extra"),
+                prov(SourceId::Aur, ""),
+                prov(SourceId::Aur, ""),
+                prov(SourceId::Aur, ""),
+            ],
+        );
+        let groups = app.badge_groups(&row);
+        let summary: Vec<(&str, usize)> =
+            groups.iter().map(|g| (g.label.as_str(), g.count)).collect();
+        assert_eq!(summary, vec![("extra", 1), ("aur", 3)]);
     }
 
     fn app_with_repos() -> App {

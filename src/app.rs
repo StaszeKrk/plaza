@@ -873,13 +873,13 @@ impl App {
             } else {
                 // Filtering: match quality (exact > prefix > substring) wins over the
                 // upgradable float, so typing a name surfaces it even if something
-                // upgradable also matches. The chosen sort breaks ties within a rank.
+                // upgradable also matches. The chosen sort breaks ties within a rank
+                // (`key_cmp` ends with a total name order, so it is the final
+                // discriminator).
                 rank(&q, &a.name)
                     .cmp(&rank(&q, &b.name))
                     .then_with(|| bu.cmp(&au))
                     .then_with(|| key_cmp(a, b, key, dir))
-                    .then_with(|| a.name.len().cmp(&b.name.len()))
-                    .then_with(|| a.name.cmp(&b.name))
             }
         });
         rows

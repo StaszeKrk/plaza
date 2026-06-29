@@ -377,9 +377,12 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
             sources::installed::parse_installed_list(&native, &foreign, &repos, &explicit, &orphan);
         // Enrich pacman/AUR rows with size + last install/upgrade date from the
         // local db (locale-independent integers; missing db leaves them None).
-        let meta = sources::installed::read_local_db_meta(std::path::Path::new(
-            "/var/lib/pacman/local",
-        ));
+        // Reading every desc file is blocking fs, so keep it off the async worker.
+        let meta = tokio::task::spawn_blocking(|| {
+            sources::installed::read_local_db_meta(std::path::Path::new("/var/lib/pacman/local"))
+        })
+        .await
+        .unwrap_or_default();
         for pkg in list.iter_mut().filter(|p| p.origin != "flatpak") {
             if let Some((size, date)) = meta.get(&pkg.name) {
                 pkg.size = *size;

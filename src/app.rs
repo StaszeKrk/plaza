@@ -87,6 +87,15 @@ pub enum Dir {
     Right,
 }
 
+/// What pressing Enter on the selected sidebar row does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarAction {
+    /// An upgrade row: `upgrade_scope_selected` is now set; open the confirm.
+    Upgrade,
+    /// A VIEWS row: `active_view` is now switched.
+    SwitchView,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MainView {
     Results,
@@ -583,9 +592,69 @@ impl App {
     }
 
     pub fn move_sidebar(&mut self, delta: i32) {
-        let max = VIEW_COUNT as i32 - 1;
+        let max = self.sidebar_item_count() as i32 - 1;
         let next = (self.sidebar_selected as i32 + delta).clamp(0, max);
         self.sidebar_selected = next as usize;
+    }
+
+    /// Selectable upgrade rows in the sidebar: one per present source, then a
+    /// "total" row. These precede the VIEWS rows in the combined list.
+    pub fn sidebar_upgrade_rows(&self) -> usize {
+        self.source_status.len() + 1
+    }
+
+    /// Index of the "total" upgrade row (last of the upgrade rows).
+    pub fn sidebar_total_row(&self) -> usize {
+        self.source_status.len()
+    }
+
+    /// Total number of selectable sidebar rows (upgrade rows + VIEWS rows).
+    pub fn sidebar_item_count(&self) -> usize {
+        self.sidebar_upgrade_rows() + VIEW_COUNT
+    }
+
+    /// The `sidebar_selected` index of `view`'s VIEWS row.
+    pub fn sidebar_view_row(&self, view: ActiveView) -> usize {
+        self.sidebar_upgrade_rows() + view.index()
+    }
+
+    /// If the selected sidebar row is an upgrade row, the upgrade scope it maps to
+    /// (`0` = All/total, `n` = the nth present source). `None` for VIEWS rows.
+    pub fn sidebar_selected_scope(&self) -> Option<usize> {
+        let n = self.source_status.len();
+        match self.sidebar_selected {
+            i if i < n => Some(i + 1), // source row -> that source's scope
+            i if i == n => Some(0),    // total row -> All
+            _ => None,                 // VIEWS row
+        }
+    }
+
+    /// Total pending updates across sources, or `None` when no source's count is
+    /// known yet (e.g. pacman-contrib missing and flatpak not yet checked).
+    pub fn total_updates(&self) -> Option<usize> {
+        let any_known = self.updates.repo.is_some()
+            || self.updates.aur.is_some()
+            || self.updates.flatpak.is_some();
+        any_known.then_some(self.updates_list.len())
+    }
+
+    /// Act on the selected sidebar row. Upgrade rows set the upgrade scope and
+    /// return `Upgrade`; VIEWS rows switch the active view and return `SwitchView`.
+    pub fn activate_sidebar(&mut self) -> SidebarAction {
+        match self.sidebar_selected_scope() {
+            Some(scope) => {
+                self.upgrade_scope_selected = scope;
+                SidebarAction::Upgrade
+            }
+            None => {
+                let view_idx = self.sidebar_selected - self.sidebar_upgrade_rows();
+                self.active_view = ActiveView::from_index(view_idx);
+                if self.active_view == ActiveView::Manage {
+                    self.clamp_installed();
+                }
+                SidebarAction::SwitchView
+            }
+        }
     }
 
     /// Drop the finished/aborted task and hide the pane.
@@ -622,7 +691,7 @@ impl App {
         self.results_selected = 0;
         // A search always lands in the Search view's results.
         self.active_view = ActiveView::Search;
-        self.sidebar_selected = ActiveView::Search.index();
+        self.sidebar_selected = self.sidebar_view_row(ActiveView::Search);
         self.main_view = MainView::Results;
         for (_, state) in &mut self.source_status {
             *state = SourceState::Loading;
@@ -684,7 +753,7 @@ impl App {
             ActiveView::Search => ActiveView::Manage,
             ActiveView::Manage => ActiveView::Search,
         };
-        self.sidebar_selected = self.active_view.index();
+        self.sidebar_selected = self.sidebar_view_row(self.active_view);
         match self.active_view {
             ActiveView::Search => {
                 self.focus = Focus::Search;
@@ -1913,5 +1982,79 @@ mod tests {
         app.move_selection(10);
         assert_eq!(app.results_selected, 1);
         assert_eq!(app.selected_row().unwrap().name, app.rows[1].name);
+    }
+
+    #[test]
+    fn sidebar_index_model_maps_rows_to_scopes() {
+        let mut app = App::with_settings(
+            vec![SourceId::Pacman, SourceId::Aur, SourceId::Flatpak],
+            Settings::default(),
+        );
+        // 3 sources + total = 4 upgrade rows; + 2 VIEWS = 6 items total.
+        assert_eq!(app.sidebar_upgrade_rows(), 4);
+        assert_eq!(app.sidebar_total_row(), 3);
+        assert_eq!(app.sidebar_item_count(), 6);
+        assert_eq!(app.sidebar_view_row(ActiveView::Search), 4);
+        assert_eq!(app.sidebar_view_row(ActiveView::Manage), 5);
+
+        // App does not derive Clone, so mutate the one app and check each index.
+        let expected = [Some(1), Some(2), Some(3), Some(0), None, None];
+        for (i, want) in expected.iter().enumerate() {
+            app.sidebar_selected = i;
+            assert_eq!(app.sidebar_selected_scope(), *want, "row {i}");
+        }
+    }
+
+    #[test]
+    fn move_sidebar_clamps_across_full_list() {
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        // 2 sources + total + 2 views = 5 items, max index 4.
+        app.sidebar_selected = 0;
+        app.move_sidebar(-1);
+        assert_eq!(app.sidebar_selected, 0);
+        app.move_sidebar(100);
+        assert_eq!(app.sidebar_selected, 4);
+    }
+
+    #[test]
+    fn activate_sidebar_upgrade_row_sets_scope() {
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        app.sidebar_selected = 1; // aur upgrade row
+        assert_eq!(app.activate_sidebar(), SidebarAction::Upgrade);
+        assert_eq!(app.upgrade_scope_selected, 2);
+
+        app.sidebar_selected = app.sidebar_total_row(); // total
+        assert_eq!(app.activate_sidebar(), SidebarAction::Upgrade);
+        assert_eq!(app.upgrade_scope_selected, 0);
+    }
+
+    #[test]
+    fn activate_sidebar_view_row_switches_view() {
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        app.sidebar_selected = app.sidebar_view_row(ActiveView::Manage);
+        assert_eq!(app.activate_sidebar(), SidebarAction::SwitchView);
+        assert_eq!(app.active_view, ActiveView::Manage);
+    }
+
+    #[test]
+    fn total_updates_is_none_until_a_source_count_is_known() {
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        assert_eq!(app.total_updates(), None);
+        app.updates.repo = Some(2);
+        app.updates_list = vec![
+            UpdateEntry {
+                name: "a".into(),
+                old_version: "1".into(),
+                new_version: "2".into(),
+                source_id: SourceId::Pacman,
+            },
+            UpdateEntry {
+                name: "b".into(),
+                old_version: "1".into(),
+                new_version: "2".into(),
+                source_id: SourceId::Pacman,
+            },
+        ];
+        assert_eq!(app.total_updates(), Some(2));
     }
 }

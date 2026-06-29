@@ -28,19 +28,24 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     let list_border = crate::ui::border_color(app, Focus::List);
     let pal = &app.palette;
+    let pkg_icon = crate::ui::ic_package(app);
 
     // --- installed list (updates floated to top, filtered by the search bar) ---
     let rows = app.manage_rows();
     let items: Vec<ListItem> = rows
         .iter()
         .map(|pk| {
-            let mut spans = name_cell(
+            let mut spans: Vec<Span> = Vec::new();
+            if !pkg_icon.is_empty() {
+                spans.push(Span::styled(format!("{pkg_icon} "), Style::default().fg(pal.muted)));
+            }
+            spans.extend(name_cell(
                 app.manage_label(pk),
                 &app.manage_filter,
                 Style::default().fg(pal.fg),
                 app.settings.highlight,
                 pal.accent,
-            );
+            ));
             spans.push(Span::styled(
                 format!("{:<16} ", truncate(&pk.version, 16)),
                 Style::default().fg(pal.muted),

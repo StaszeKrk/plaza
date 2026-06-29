@@ -736,16 +736,6 @@ impl App {
         self.search_rows().get(self.results_selected).copied()
     }
 
-    // --- sidebar VIEWS ---
-
-    /// Activate the view highlighted in the sidebar.
-    pub fn select_sidebar_view(&mut self) {
-        self.active_view = ActiveView::from_index(self.sidebar_selected);
-        if self.active_view == ActiveView::Manage {
-            self.clamp_installed();
-        }
-    }
-
     /// Toggle between the Search and Manage views (the `Tab` key). Lands ready to
     /// type in Search, or browsing the list in Manage.
     pub fn toggle_view(&mut self) {

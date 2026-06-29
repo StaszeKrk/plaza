@@ -12,7 +12,7 @@ mod theme;
 mod ui;
 
 use crate::action::runner::{key_to_bytes, start_action, TaskState};
-use crate::app::{ActiveView, App, Dir, Focus, MainView, TaskView};
+use crate::app::{ActiveView, App, Dir, Focus, MainView, SidebarAction, TaskView};
 use crate::event::AppEvent;
 use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
@@ -914,19 +914,24 @@ fn interact_search(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>)
     }
 }
 
-/// Interact: the sidebar VIEWS list. Up/down highlight, Enter selects the view.
 fn interact_sidebar(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => app.move_sidebar(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_sidebar(1),
-        KeyCode::Enter | KeyCode::Char(' ') => {
-            app.select_sidebar_view();
-            app.interacting = false;
-            app.focus = app.content_landing();
-            if app.active_view == ActiveView::Manage {
-                spawn_stats_tasks(tx.clone(), app.aur_helper_bin.clone(), app.present_sources().contains(&SourceId::Flatpak)); // refresh installed + updates
+        KeyCode::Enter | KeyCode::Char(' ') => match app.activate_sidebar() {
+            SidebarAction::Upgrade => request_upgrade(app),
+            SidebarAction::SwitchView => {
+                app.interacting = false;
+                app.focus = app.content_landing();
+                if app.active_view == ActiveView::Manage {
+                    spawn_stats_tasks(
+                        tx.clone(),
+                        app.aur_helper_bin.clone(),
+                        app.present_sources().contains(&SourceId::Flatpak),
+                    );
+                }
             }
-        }
+        },
         KeyCode::Esc => app.interacting = false,
         _ => {}
     }

@@ -118,7 +118,7 @@ impl Default for Icons {
         Icons {
             enabled: true,
             package: "\u{f487}".into(),
-            repo: "\u{f0c3}".into(),
+            repo: "\u{f233}".into(),
             aur: "\u{f303}".into(),
             flatpak: "\u{f3d0}".into(),
             installed: "\u{f00c}".into(),

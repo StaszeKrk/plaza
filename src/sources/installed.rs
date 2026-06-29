@@ -102,7 +102,11 @@ pub fn count_lines(output: &str) -> usize {
 /// "extra" or "aur" for foreign packages), and installation-reason flags.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct InstalledPkg {
+    /// The action target: package name for pacman/AUR, app ID for Flatpak.
     pub name: String,
+    /// Friendly label shown in the list. Equals `name` for pacman/AUR; the human
+    /// name for Flatpak (where `name` is the reverse-DNS app ID).
+    pub display: String,
     pub version: String,
     pub origin: String,
     /// In `pacman -Qe`: the user installed this on purpose.
@@ -173,6 +177,7 @@ pub fn parse_installed_list(
                 Some(InstalledPkg {
                     explicit: explicit.contains(name),
                     orphan: orphan.contains(name),
+                    display: name.to_string(), // pacman/AUR: label is the name
                     name: name.to_string(),
                     version,
                     origin,

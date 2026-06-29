@@ -42,6 +42,9 @@ pub struct Settings {
     /// searched, stat-counted, or update-checked. Any source may be disabled,
     /// including all of them (honest empty state, not a blocked one).
     pub disabled_sources: Vec<SourceId>,
+    /// Show the reverse-DNS app ID instead of the human name for Flatpak rows in
+    /// the Manage list. Off by default (human names).
+    pub flatpak_app_id: bool,
 }
 
 impl Default for Settings {
@@ -61,6 +64,7 @@ impl Default for Settings {
             default_reason: ReasonFilter::default(),
             group_variants: true,
             disabled_sources: Vec::new(),
+            flatpak_app_id: false,
         }
     }
 }

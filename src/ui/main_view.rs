@@ -74,7 +74,7 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|pk| {
             let mut spans = name_cell(
-                &pk.name,
+                app.manage_label(pk),
                 &app.manage_filter,
                 Style::default().fg(pal.fg),
                 app.settings.highlight,
@@ -92,11 +92,11 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
                 None => spans.push(Span::raw(format!("{:<15} ", ""))),
             }
             // pacman cannot tell which repo a native package came from, only that
-            // it is foreign (AUR) or not, so badge just official vs aur.
-            let (label, src) = if pk.origin == "aur" {
-                ("aur", SourceId::Aur)
-            } else {
-                ("official", SourceId::Pacman)
+            // it is foreign (AUR) or not, so badge just official vs aur (or flatpak).
+            let (label, src) = match pk.origin.as_str() {
+                "aur" => ("aur", SourceId::Aur),
+                "flatpak" => ("flatpak", SourceId::Flatpak),
+                _ => ("official", SourceId::Pacman),
             };
             spans.push(crate::ui::badge_span(app, label, src));
             ListItem::new(Line::from(spans))

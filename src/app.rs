@@ -61,6 +61,7 @@ pub enum OptionId {
     GroupVariants,
     RemoveDepth,
     AurHelper,
+    FlatpakAppId,
     HideIdleFilter,
 }
 
@@ -394,7 +395,7 @@ impl App {
         &[
             ("Appearance", &[Palette, Skin, Highlight]),
             ("Search", &[SearchDelay, CollapseRepos, GroupVariants]),
-            ("Manage", &[RemoveDepth, AurHelper]),
+            ("Manage", &[RemoveDepth, AurHelper, FlatpakAppId]),
             ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
         ]
@@ -425,6 +426,7 @@ impl App {
             OptionId::ShowHotkeys => self.settings.show_hotkeys = !self.settings.show_hotkeys,
             OptionId::CollapseRepos => self.settings.collapse_repos = !self.settings.collapse_repos,
             OptionId::GroupVariants => self.settings.group_variants = !self.settings.group_variants,
+            OptionId::FlatpakAppId => self.settings.flatpak_app_id = !self.settings.flatpak_app_id,
             OptionId::Palette => self.cycle_palette(),
             OptionId::Skin => self.cycle_skin(),
             OptionId::Highlight => self.settings.highlight = self.settings.highlight.next(),
@@ -696,7 +698,11 @@ impl App {
         let mut rows: Vec<&InstalledPkg> = self
             .installed_list
             .iter()
-            .filter(|p| q.is_empty() || p.name.to_ascii_lowercase().contains(&q))
+            .filter(|p| {
+                q.is_empty()
+                    || p.name.to_ascii_lowercase().contains(&q)
+                    || p.display.to_ascii_lowercase().contains(&q)
+            })
             .filter(|p| !self.manage_filter_repo.off.contains(&p.origin))
             .filter(|p| match self.manage_reason {
                 crate::model::ReasonFilter::All => true,
@@ -721,6 +727,17 @@ impl App {
             }
         });
         rows
+    }
+
+    /// The label shown for an installed package in the Manage list: the human
+    /// name normally, or the reverse-DNS app ID for Flatpak when the
+    /// `flatpak_app_id` option is on.
+    pub fn manage_label<'a>(&self, pkg: &'a InstalledPkg) -> &'a str {
+        if self.settings.flatpak_app_id && pkg.origin == "flatpak" {
+            &pkg.name
+        } else {
+            &pkg.display
+        }
     }
 
     /// The selected installed package (indexes the filtered/sorted rows).

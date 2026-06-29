@@ -342,8 +342,8 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
             );
             // Fold installed Flatpak app IDs into the index so search results show
             // installed state for Flatpak too.
-            for (id, ver) in sources::flatpak::parse_installed(&fp_text) {
-                idx.insert(id, ver);
+            for pkg in sources::flatpak::parse_installed_pkgs(&fp_text) {
+                idx.insert(pkg.name, pkg.version);
             }
             let _ = tx_inst.send(AppEvent::Installed(idx));
         }
@@ -456,11 +456,12 @@ async fn run_count(args: &[&str]) -> usize {
     }
 }
 
-/// Installed Flatpak apps as `app-id<TAB>version` lines, or empty on failure.
+/// Installed Flatpak apps as `app-id<TAB>name<TAB>version` lines, or empty on
+/// failure. The name column is the human label shown in the Manage list.
 async fn flatpak_list_text() -> String {
     Command::new("flatpak")
         .env("LC_ALL", "C")
-        .args(["list", "--app", "--columns=application,version"])
+        .args(["list", "--app", "--columns=application,name,version"])
         .output()
         .await
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())

@@ -1,4 +1,4 @@
-use crate::model::{AurHelper, HighlightMode, ReasonFilter, RemoveDepth, SourceId};
+use crate::model::{AurHelper, HighlightMode, ReasonFilter, RemoveDepth, SortDir, SortKey, SourceId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -45,6 +45,12 @@ pub struct Settings {
     /// Show the reverse-DNS app ID instead of the human name for Flatpak rows in
     /// the Manage list. Off by default (human names).
     pub flatpak_app_id: bool,
+    /// Default Manage sort key at launch.
+    pub default_manage_sort_key: SortKey,
+    /// Default Manage sort direction at launch.
+    pub default_manage_sort_dir: SortDir,
+    /// Default for "float upgradable packages to the top" in Manage (on).
+    pub default_manage_float_updates: bool,
 }
 
 impl Default for Settings {
@@ -65,6 +71,9 @@ impl Default for Settings {
             group_variants: true,
             disabled_sources: Vec::new(),
             flatpak_app_id: false,
+            default_manage_sort_key: SortKey::Name,
+            default_manage_sort_dir: SortDir::Asc,
+            default_manage_float_updates: true,
         }
     }
 }
@@ -152,6 +161,22 @@ mod tests {
         let s = Settings::default();
         assert!(s.default_search_filter_off.is_empty());
         assert!(s.default_manage_filter_off.is_empty());
+    }
+
+    #[test]
+    fn sort_defaults() {
+        let s = Settings::default();
+        assert_eq!(s.default_manage_sort_key, SortKey::Name);
+        assert_eq!(s.default_manage_sort_dir, SortDir::Asc);
+        assert!(s.default_manage_float_updates);
+    }
+
+    #[test]
+    fn old_settings_without_sort_load_defaults() {
+        let json = r#"{"show_hotkeys":true,"debounce_ms":400}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.default_manage_sort_key, SortKey::Name);
+        assert!(s.default_manage_float_updates);
     }
 
     #[test]

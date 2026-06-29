@@ -264,6 +264,72 @@ impl ReasonFilter {
     }
 }
 
+/// How the Manage installed list is ordered. `Updated` is the last
+/// install/upgrade time (neither pacman nor Flatpak stores a robust original
+/// install date), so it is labelled "updated" rather than "install date".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SortKey {
+    #[default]
+    Name,
+    Size,
+    Updated,
+}
+
+impl SortKey {
+    /// The direction a freshly chosen key reads best: names A to Z, but size and
+    /// recency largest/newest first.
+    pub fn default_dir(self) -> SortDir {
+        match self {
+            SortKey::Name => SortDir::Asc,
+            SortKey::Size => SortDir::Desc,
+            SortKey::Updated => SortDir::Desc,
+        }
+    }
+
+    /// Short label for the filter-box row.
+    pub fn label(self) -> &'static str {
+        match self {
+            SortKey::Name => "name",
+            SortKey::Size => "size",
+            SortKey::Updated => "updated",
+        }
+    }
+}
+
+/// Sort direction for the Manage list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SortDir {
+    #[default]
+    Asc,
+    Desc,
+}
+
+impl SortDir {
+    pub fn flip(self) -> SortDir {
+        match self {
+            SortDir::Asc => SortDir::Desc,
+            SortDir::Desc => SortDir::Asc,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sort_tests {
+    use super::*;
+
+    #[test]
+    fn sort_key_default_dir_and_label() {
+        assert_eq!(SortKey::default(), SortKey::Name);
+        assert_eq!(SortDir::default(), SortDir::Asc);
+        assert_eq!(SortKey::Name.default_dir(), SortDir::Asc);
+        assert_eq!(SortKey::Size.default_dir(), SortDir::Desc);
+        assert_eq!(SortKey::Updated.default_dir(), SortDir::Desc);
+        assert_eq!(SortDir::Asc.flip(), SortDir::Desc);
+        assert_eq!(SortDir::Desc.flip(), SortDir::Asc);
+        assert_eq!(SortKey::Updated.label(), "updated");
+    }
+}
+
 /// How the substring matching the search/filter text is drawn in the name cell.
 /// Default is `Underline`. Cycled in Options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

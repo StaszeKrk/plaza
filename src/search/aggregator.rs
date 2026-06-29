@@ -14,19 +14,20 @@ use std::collections::HashMap;
 pub fn merge(
     hits: Vec<PackageHit>,
     installed: &InstalledIndex,
-    group_variants: bool,
+    stack_variants: bool,
+    group_flatpak: bool,
 ) -> Vec<PackageRow> {
     let mut map: HashMap<String, PackageRow> = HashMap::new();
 
     // Round 0: base hits. Round 1: stripped variants. Round 2: Flatpak.
     let mut rounds: Vec<Vec<&PackageHit>> = vec![Vec::new(), Vec::new(), Vec::new()];
     for h in &hits {
-        rounds[round_of(h, group_variants)].push(h);
+        rounds[round_of(h, stack_variants)].push(h);
     }
 
     for (round, group) in rounds.into_iter().enumerate() {
         for hit in group {
-            let key = bucket_key(hit, group_variants, round == 1, &map);
+            let key = bucket_key(hit, stack_variants, group_flatpak, round == 1, &map);
             let target = hit
                 .meta
                 .canonical_id
@@ -75,12 +76,12 @@ pub fn merge(
 }
 
 /// Which merge round a hit belongs to (0 base, 1 stripped variant, 2 Flatpak).
-fn round_of(h: &PackageHit, group_variants: bool) -> usize {
+fn round_of(h: &PackageHit, stack_variants: bool) -> usize {
     if h.source_id == SourceId::Flatpak {
         return 2;
     }
     let raw = h.name.trim().to_lowercase();
-    if group_variants && h.meta.canonical_id.is_none() && normalize_key(&h.name, true) != raw {
+    if stack_variants && h.meta.canonical_id.is_none() && normalize_key(&h.name, true) != raw {
         return 1;
     }
     0
@@ -90,7 +91,8 @@ fn round_of(h: &PackageHit, group_variants: bool) -> usize {
 /// buckets filled so far.
 fn bucket_key(
     hit: &PackageHit,
-    group_variants: bool,
+    stack_variants: bool,
+    group_flatpak: bool,
     is_stripped: bool,
     map: &HashMap<String, PackageRow>,
 ) -> String {
@@ -101,7 +103,7 @@ fn bucket_key(
     // unless a real package of that name is present; org.gimp.GIMP -> "gimp"
     // joins the gimp row.
     if hit.source_id == SourceId::Flatpak {
-        if group_variants {
+        if group_flatpak {
             let nk = format!("name:{}", normalize_key(&hit.name, true));
             if map.contains_key(&nk) {
                 return nk;
@@ -131,7 +133,7 @@ fn bucket_key(
         }
         return format!("name:{}", hit.name.trim().to_lowercase());
     }
-    format!("name:{}", normalize_key(&hit.name, group_variants))
+    format!("name:{}", normalize_key(&hit.name, stack_variants))
 }
 
 fn source_order(id: SourceId) -> u8 {
@@ -228,6 +230,19 @@ mod tests {
     }
 
     #[test]
+    fn stack_variants_off_keeps_variant_rows_separate() {
+        let idx = InstalledIndex::default();
+        let hits = vec![
+            hit("cork-rs", SourceId::Aur, "1", ""),
+            hit("cork-rs-bin", SourceId::Aur, "1", ""),
+        ];
+        let grouped = merge(hits.clone(), &idx, true, true);
+        let ungrouped = merge(hits, &idx, false, true);
+        assert!(grouped.len() < ungrouped.len());
+        assert_eq!(ungrouped.len(), 2);
+    }
+
+    #[test]
     fn groups_variants_and_flatpak_bridge_when_on() {
         let inst = InstalledIndex::default();
         let hits = vec![
@@ -235,7 +250,7 @@ mod tests {
             fhit("gimp-git", SourceId::Aur, None),
             fhit("GIMP", SourceId::Flatpak, Some("org.gimp.GIMP")),
         ];
-        let rows = merge(hits, &inst, true);
+        let rows = merge(hits, &inst, true, true);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "gimp"); // shortest base label
         assert_eq!(rows[0].providers.len(), 3);
@@ -255,7 +270,7 @@ mod tests {
             fhit("gimp-bin", SourceId::Aur, None),
             fhit("gimp-git", SourceId::Aur, None),
         ];
-        let rows = merge(hits, &inst, true);
+        let rows = merge(hits, &inst, true, true);
         assert_eq!(rows.len(), 1);
         // All three variants survive as distinct providers despite sharing
         // (Aur, repo=None); they differ by target.
@@ -274,7 +289,7 @@ mod tests {
             fhit("gimp", SourceId::Pacman, None),
             fhit("GNU Image Manipulation Program", SourceId::Flatpak, Some("org.gimp.GIMP")),
         ];
-        let rows = merge(hits, &inst, true);
+        let rows = merge(hits, &inst, true, true);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "gimp");
         assert!(rows[0].providers.iter().any(|p| p.source_id == SourceId::Flatpak));
@@ -289,7 +304,7 @@ mod tests {
             fhit("code", SourceId::Pacman, None),
             fhit("Some Cool Tool", SourceId::Flatpak, Some("com.example.Frobnicator")),
         ];
-        let rows = merge(hits, &inst, true);
+        let rows = merge(hits, &inst, true, true);
         assert_eq!(rows.len(), 2);
     }
 
@@ -297,7 +312,7 @@ mod tests {
     fn orphan_variant_stays_standalone_without_base() {
         let inst = InstalledIndex::default();
         let hits = vec![fhit("python-git", SourceId::Aur, None)];
-        let rows = merge(hits, &inst, true);
+        let rows = merge(hits, &inst, true, true);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "python-git"); // did not invent a "python" row
     }
@@ -310,7 +325,7 @@ mod tests {
             fhit("gimp-bin", SourceId::Aur, None),
             fhit("GIMP", SourceId::Flatpak, Some("org.gimp.GIMP")),
         ];
-        let rows = merge(hits, &inst, false);
+        let rows = merge(hits, &inst, false, false);
         assert_eq!(rows.len(), 3); // nothing merges with grouping off
     }
 
@@ -322,7 +337,7 @@ mod tests {
             hit("firefox-bin", SourceId::Aur, "141.0-1", "binary build"),
         ];
         let idx = InstalledIndex::from_query_output("firefox 141.0\n");
-        let mut rows = merge(hits, &idx, false);
+        let mut rows = merge(hits, &idx, false, false);
         relevance_sort("firefox", &mut rows);
 
         assert_eq!(rows.len(), 2);
@@ -360,7 +375,7 @@ mod tests {
             hit_repo("neovim", "0.12.3-1", "extra"),
         ];
         let idx = InstalledIndex::default();
-        let rows = merge(hits, &idx, false);
+        let rows = merge(hits, &idx, false, false);
         assert_eq!(rows.len(), 1);
         let badges: Vec<&str> = rows[0].providers.iter().map(|p| p.badge()).collect();
         assert_eq!(badges, vec!["world", "extra-x86-64-v3", "extra"]);
@@ -386,7 +401,7 @@ mod tests {
             fhit("zzz-unrelated", SourceId::Aur, None),
             fhit("GNU Image Manipulation Program", SourceId::Flatpak, Some("org.gimp.GIMP")),
         ];
-        let mut rows = merge(hits, &inst, true);
+        let mut rows = merge(hits, &inst, true, true);
         relevance_sort("gimp", &mut rows);
         assert_eq!(rows[0].name, "GNU Image Manipulation Program");
     }
@@ -399,7 +414,7 @@ mod tests {
             hit("firefox-bin", SourceId::Aur, "1", ""),
             hit("firefox", SourceId::Pacman, "1", ""),
         ];
-        let mut rows = merge(hits, &idx, false);
+        let mut rows = merge(hits, &idx, false, false);
         relevance_sort("firefox", &mut rows);
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["firefox", "firefox-bin", "xfirefox"]);

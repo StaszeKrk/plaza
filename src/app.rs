@@ -64,7 +64,8 @@ pub enum OptionId {
     Highlight,
     SearchDelay,
     CollapseRepos,
-    GroupVariants,
+    StackVariants,
+    GroupFlatpak,
     RemoveDepth,
     AurHelper,
     FlatpakAppId,
@@ -476,7 +477,7 @@ impl App {
         use OptionId::*;
         &[
             ("Appearance", &[Palette, Skin, Highlight]),
-            ("Search", &[SearchDelay, CollapseRepos, GroupVariants]),
+            ("Search", &[SearchDelay, CollapseRepos, StackVariants, GroupFlatpak]),
             ("Manage", &[RemoveDepth, AurHelper, FlatpakAppId, FloatUpdates]),
             ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
@@ -507,7 +508,8 @@ impl App {
         match self.selected_option() {
             OptionId::ShowHotkeys => self.settings.show_hotkeys = !self.settings.show_hotkeys,
             OptionId::CollapseRepos => self.settings.collapse_repos = !self.settings.collapse_repos,
-            OptionId::GroupVariants => self.settings.group_variants = !self.settings.group_variants,
+            OptionId::StackVariants => self.settings.stack_variants = !self.settings.stack_variants,
+            OptionId::GroupFlatpak => self.settings.group_flatpak = !self.settings.group_flatpak,
             OptionId::FlatpakAppId => self.settings.flatpak_app_id = !self.settings.flatpak_app_id,
             OptionId::FloatUpdates => {
                 self.manage_float_updates = !self.manage_float_updates;
@@ -772,7 +774,12 @@ impl App {
         }
         let count = hits.len();
         self.hits_buffer.extend(hits);
-        self.rows = merge(self.hits_buffer.clone(), &self.installed, self.settings.group_variants);
+        self.rows = merge(
+            self.hits_buffer.clone(),
+            &self.installed,
+            self.settings.stack_variants,
+            self.settings.group_flatpak,
+        );
         relevance_sort(&self.query, &mut self.rows);
         let visible = self.search_rows().len();
         if self.results_selected >= visible {
@@ -1497,7 +1504,7 @@ mod tests {
     #[test]
     fn applies_matching_results_and_ignores_stale() {
         // Keep variants separate so this stays a test about staleness, not grouping.
-        let settings = Settings { group_variants: false, ..Settings::default() };
+        let settings = Settings { stack_variants: false, ..Settings::default() };
         let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], settings);
         let id = app.start_query("firefox".into());
 

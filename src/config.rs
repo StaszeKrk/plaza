@@ -34,10 +34,14 @@ pub struct Settings {
     pub default_manage_filter_off: Vec<String>,
     /// Default Manage installation-reason filter at launch.
     pub default_reason: ReasonFilter,
-    /// Collapse name variants (`gimp`/`gimp-bin`/`gimp-git`) and a name-matching
-    /// Flatpak into one row, picking the edition in the detail view. On by
-    /// default; off restores one row per exact name.
-    pub group_variants: bool,
+    /// Collapse name variants (`gimp`/`gimp-bin`/`gimp-git`) into one row, picking
+    /// the edition in the detail view. On by default; off restores one row per
+    /// exact name. Aliased from the former `group_variants` key.
+    #[serde(alias = "group_variants")]
+    pub stack_variants: bool,
+    /// Fold a name-matching Flatpak into the same row as its repo/AUR package.
+    /// On by default; off keeps the Flatpak as its own row.
+    pub group_flatpak: bool,
     /// Sources the user has turned off. A disabled source is never detected,
     /// searched, stat-counted, or update-checked. Any source may be disabled,
     /// including all of them (honest empty state, not a blocked one).
@@ -68,7 +72,8 @@ impl Default for Settings {
             default_search_filter_off: Vec::new(),
             default_manage_filter_off: Vec::new(),
             default_reason: ReasonFilter::default(),
-            group_variants: true,
+            stack_variants: true,
+            group_flatpak: true,
             disabled_sources: Vec::new(),
             flatpak_app_id: false,
             default_manage_sort_key: SortKey::Name,
@@ -164,6 +169,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_group_variants_aliases_to_stack_variants() {
+        let json = r#"{"group_variants":false}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.stack_variants);
+        assert!(s.group_flatpak); // new field defaults on
+    }
+
+    #[test]
     fn sort_defaults() {
         let s = Settings::default();
         assert_eq!(s.default_manage_sort_key, SortKey::Name);
@@ -200,7 +213,8 @@ mod tests {
     #[test]
     fn default_group_variants_is_on_and_no_disabled_sources() {
         let s = Settings::default();
-        assert!(s.group_variants);
+        assert!(s.stack_variants);
+        assert!(s.group_flatpak);
         assert!(s.disabled_sources.is_empty());
     }
 
@@ -208,7 +222,8 @@ mod tests {
     fn old_settings_without_grouping_fields_load_as_defaults() {
         let json = r#"{"show_hotkeys":true,"debounce_ms":400}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
-        assert!(s.group_variants);
+        assert!(s.stack_variants);
+        assert!(s.group_flatpak);
         assert!(s.disabled_sources.is_empty());
     }
 

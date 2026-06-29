@@ -1188,7 +1188,7 @@ async fn run_search_cli(term: &str) -> anyhow::Result<()> {
         }
     }
     let idx = installed_index().await;
-    let mut rows = merge(all_hits, &idx, settings.group_variants);
+    let mut rows = merge(all_hits, &idx, settings.stack_variants, settings.group_flatpak);
     relevance_sort(term, &mut rows);
     for row in &rows {
         let badges: Vec<&str> = row.providers.iter().map(|p| p.badge()).collect();

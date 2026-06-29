@@ -494,6 +494,7 @@ impl InstalledStats {
 pub struct UpdatesInfo {
     pub repo: Option<usize>,
     pub aur: Option<usize>,
+    pub flatpak: Option<usize>,
 }
 
 /// The bare package name from a dependency string, dropping version

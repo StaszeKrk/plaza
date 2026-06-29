@@ -380,11 +380,31 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
     tokio::spawn(async move {
         let repo_text = repo_update_text().await;
         let aur_text = aur_update_text(aur_helper).await;
+        // Flatpak updates: `remote-ls --updates` reports the upgradable app IDs
+        // (no versions). Network call, in the background like the others.
+        let flatpak_ids: Vec<String> = if flatpak {
+            match Command::new("flatpak")
+                .env("LC_ALL", "C")
+                .args(["remote-ls", "--user", "--app", "--updates"])
+                .output()
+                .await
+            {
+                Ok(out) => sources::flatpak::parse_updates(&String::from_utf8_lossy(&out.stdout)),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         let repo = repo_text
             .as_deref()
             .map(sources::updates::parse_update_count);
         let aur = aur_text.as_deref().map(sources::updates::parse_update_count);
-        let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo { repo, aur }));
+        let flatpak_count = flatpak.then_some(flatpak_ids.len());
+        let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo {
+            repo,
+            aur,
+            flatpak: flatpak_count,
+        }));
 
         let mut list = Vec::new();
         if let Some(t) = &repo_text {
@@ -393,25 +413,13 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
         if let Some(t) = &aur_text {
             list.extend(sources::updates::parse_update_list(t, SourceId::Aur));
         }
-        // Flatpak updates: `remote-ls --updates` reports the upgradable app IDs
-        // (no versions), so the entries carry empty version strings. This call
-        // reaches the network; it runs here in the background like the others.
-        if flatpak {
-            if let Ok(out) = Command::new("flatpak")
-                .env("LC_ALL", "C")
-                .args(["remote-ls", "--user", "--app", "--updates"])
-                .output()
-                .await
-            {
-                for name in sources::flatpak::parse_updates(&String::from_utf8_lossy(&out.stdout)) {
-                    list.push(sources::updates::UpdateEntry {
-                        name,
-                        old_version: String::new(),
-                        new_version: String::new(),
-                        source_id: SourceId::Flatpak,
-                    });
-                }
-            }
+        for name in flatpak_ids {
+            list.push(sources::updates::UpdateEntry {
+                name,
+                old_version: String::new(),
+                new_version: String::new(),
+                source_id: SourceId::Flatpak,
+            });
         }
         let _ = tx.send(AppEvent::UpdatesList(list));
     });

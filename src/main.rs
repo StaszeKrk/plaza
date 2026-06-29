@@ -126,6 +126,13 @@ async fn run_tui() -> anyhow::Result<()> {
             if app.active_view == ActiveView::Manage {
                 dispatch_manage_detail(&mut app, &tx);
             }
+            // Same for the Search detail view: re-ensure the selected row's
+            // providers are loading after every event. A slow source (Flatpak)
+            // can return its search hit after the detail view is already open,
+            // adding a provider that Enter never dispatched; this catches it.
+            if app.active_view == ActiveView::Search && app.main_view == MainView::Detail {
+                dispatch_details(&mut app, &tx);
+            }
         }
         terminal.draw(|f| ui::draw(f, &app))?;
     }

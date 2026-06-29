@@ -79,12 +79,24 @@ fn detail_lines(
         lines.push(Line::from(Span::styled(format!("  {}", head.join(" · ")), muted)));
     }
 
+    // Flatpak: derive the Flathub link from the app id so the body is never empty
+    // while remote-info loads. The fetched repo_url is the same link, so skip it
+    // below to avoid a duplicate.
+    if p.source_id == SourceId::Flatpak {
+        lines.push(Line::from(Span::styled(
+            format!("  https://flathub.org/apps/{}", p.target),
+            Style::default().fg(pal.accent),
+        )));
+    }
+
     if let Some(d) = detail {
         if let Some(m) = &d.maintainer {
             lines.push(Line::from(Span::styled(format!("  by {m}"), muted)));
         }
-        if let Some(u) = &d.repo_url {
-            lines.push(Line::from(Span::styled(format!("  {u}"), Style::default().fg(pal.accent))));
+        if p.source_id != SourceId::Flatpak {
+            if let Some(u) = &d.repo_url {
+                lines.push(Line::from(Span::styled(format!("  {u}"), Style::default().fg(pal.accent))));
+            }
         }
         lines.extend(deps_line("depends:", &d.depends, installed, pal));
         lines.extend(deps_line("optional:", &d.optional_depends, installed, pal));
@@ -193,6 +205,10 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 } else {
                     (format!("{votes} votes · {m}"), pal.muted)
                 }
+            } else if p.source_id == SourceId::Flatpak {
+                // The remote (e.g. "flathub"), not "official" (its meta.repo holds
+                // the remote name, not a pacman repo).
+                (p.meta.repo.clone().unwrap_or_else(|| "flatpak".into()), pal.muted)
             } else if Some(i) == default_idx {
                 ("official · default".to_string(), pal.muted)
             } else if p.meta.repo.is_some() {

@@ -76,11 +76,11 @@ fn draw_sidebar_column(frame: &mut Frame, app: &App, area: Rect) {
         sidebar::draw(frame, app, area);
         return;
     }
-    // ponytail: sidebar content is a static 14 lines (incl. borders); compute it
-    // if the top box ever gains dynamic rows.
+    // ponytail: sidebar content is at most ~12 lines (incl. borders); recompute
+    // if the top box gains rows.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(14), Constraint::Min(0)])
+        .constraints([Constraint::Length(12), Constraint::Min(0)])
         .split(area);
     sidebar::draw(frame, app, chunks[0]);
     filter::draw(frame, app, chunks[1]);

@@ -5,6 +5,7 @@ use crate::model::{
     upgrade_one_command, Action, ActionSpec, InstalledStats, PackageDetail, PackageHit, PackageRow,
     Provider, SourceId, UpdatesInfo,
 };
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use crate::search::aggregator::{merge, rank, relevance_sort};
 use crate::sources::installed::{InstalledIndex, InstalledPkg};
@@ -173,6 +174,13 @@ pub struct App {
     pub main_view: MainView,
     pub results_selected: usize,
     pub detail_selected: usize,
+    /// Persisted list scroll offsets (results and Manage). Kept across frames so
+    /// the viewport stays put when the selection moves within it, instead of
+    /// re-deriving from 0 each render (which pins the selection to the bottom).
+    /// `Cell` because rendering takes `&App` but must write the adjusted offset
+    /// back; the app is single-threaded so this needs no synchronization.
+    pub results_offset: Cell<usize>,
+    pub manage_offset: Cell<usize>,
     /// Extended per-provider detail, fetched lazily on opening the detail view
     /// and keyed by `Provider::detail_key`. `detail_requested` tracks in-flight
     /// keys so a fetch is dispatched at most once per provider.
@@ -298,6 +306,8 @@ impl App {
             main_view: MainView::Results,
             results_selected: 0,
             detail_selected: 0,
+            results_offset: Cell::new(0),
+            manage_offset: Cell::new(0),
             details: HashMap::new(),
             detail_requested: HashSet::new(),
             sidebar_selected: 0,
@@ -585,6 +595,21 @@ impl App {
         if self.focus == Focus::TaskPane {
             self.focus = self.content_landing();
             self.interacting = false;
+        }
+    }
+
+    /// Reset to the empty/welcome state: discard any in-flight results (by
+    /// bumping the query id), drop the result rows, and zero the footer source
+    /// counters. Used when the query is cleared back to blank so a stale list
+    /// from an intermediate query does not linger.
+    pub fn clear_search(&mut self) {
+        self.query.clear();
+        self.query_id += 1;
+        self.hits_buffer.clear();
+        self.rows.clear();
+        self.results_selected = 0;
+        for (_, state) in &mut self.source_status {
+            *state = SourceState::Done(0);
         }
     }
 
@@ -1206,6 +1231,24 @@ mod tests {
         assert_ne!(id1, id2);
         assert!(app.rows.is_empty());
         assert_eq!(app.query, "firefox");
+    }
+
+    #[test]
+    fn clear_search_drops_rows_and_discards_inflight() {
+        let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        let id = app.start_query("firefox".into());
+        app.apply_search_results(id, SourceId::Pacman, vec![hit("firefox", SourceId::Pacman)]);
+        assert_eq!(app.rows.len(), 1);
+
+        app.clear_search();
+        assert!(app.query.is_empty());
+        assert!(app.rows.is_empty());
+        assert_eq!(app.results_selected, 0);
+        // Counters back to zero, not the previous hit count.
+        assert!(matches!(app.source_status[0].1, SourceState::Done(0)));
+        // The bumped id means a late result from the old query is now stale.
+        app.apply_search_results(id, SourceId::Aur, vec![hit("firefox-bin", SourceId::Aur)]);
+        assert!(app.rows.is_empty());
     }
 
     #[test]

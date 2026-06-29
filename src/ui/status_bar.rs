@@ -11,7 +11,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let pal = &app.palette;
     let mut spans: Vec<Span> = vec![Span::raw(" ")];
 
-    for (id, state) in &app.source_status {
+    // The source counters are live search-hit counts; they mean nothing in the
+    // Manage view, so show them only while in Search.
+    for (id, state) in app.source_status.iter().filter(|_| app.active_view != ActiveView::Manage) {
         let (txt, col) = match state {
             SourceState::Loading => ("…".to_string(), pal.muted),
             SourceState::Done(n) => (n.to_string(), pal.fg),

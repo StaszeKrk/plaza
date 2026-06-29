@@ -129,6 +129,7 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
         .highlight_style(crate::ui::highlight_style(app))
         .highlight_symbol(&cursor);
     let mut state = ListState::default();
+    *state.offset_mut() = app.manage_offset.get();
     if !rows.is_empty() {
         state.select(Some(app.installed_selected.min(rows.len() - 1)));
     }
@@ -144,6 +145,8 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         frame.render_stateful_widget(list, inner, &mut state);
     }
+    // Persist the offset ratatui adjusted so the next frame keeps the viewport.
+    app.manage_offset.set(state.offset());
 }
 
 fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
@@ -196,10 +199,12 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
         .highlight_symbol(&cursor);
 
     let mut state = ListState::default();
+    *state.offset_mut() = app.results_offset.get();
     if !rows.is_empty() {
         state.select(Some(app.results_selected.min(rows.len() - 1)));
     }
     frame.render_stateful_widget(list, area, &mut state);
+    app.results_offset.set(state.offset());
 }
 
 /// The package-name cell for a list: the name padded to 28 chars, with the part

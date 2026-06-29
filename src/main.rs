@@ -895,7 +895,13 @@ fn interact_search(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>)
                 app.installed_selected = 0;
             } else {
                 app.query.pop();
-                schedule_debounced_search(app, tx);
+                if app.query.is_empty() {
+                    // Back to blank: clear results and counters now rather than
+                    // leaving the last query's list on screen.
+                    app.clear_search();
+                } else {
+                    schedule_debounced_search(app, tx);
+                }
             }
         }
         KeyCode::Enter => {

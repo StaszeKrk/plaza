@@ -303,6 +303,10 @@ fn option_row_text(app: &App, id: OptionId) -> String {
         OptionId::FlatpakAppId => {
             format!("{} Show Flatpak app IDs in Manage", check(app.settings.flatpak_app_id))
         }
+        OptionId::FloatUpdates => format!(
+            "{} Float upgradable to top (Manage)",
+            check(app.settings.default_manage_float_updates)
+        ),
         OptionId::HideIdleFilter => {
             format!("{} Hide filter box when not in use", check(app.settings.hide_idle_filter))
         }

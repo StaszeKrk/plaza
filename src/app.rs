@@ -42,8 +42,6 @@ pub enum FilterId {
     /// A Manage sort-key choice (radio over Name/Size/Updated). Activating the
     /// already-active key flips the sort direction. Manage view only.
     Sort(crate::model::SortKey),
-    /// The "float updates to top" checkbox (Manage view only).
-    FloatUpdates,
     /// Action row: save the active view's current filter as its launch default
     /// (same as the `s` hotkey, but reachable with the cursor).
     SaveDefault,
@@ -70,6 +68,7 @@ pub enum OptionId {
     RemoveDepth,
     AurHelper,
     FlatpakAppId,
+    FloatUpdates,
     HideIdleFilter,
 }
 
@@ -478,7 +477,7 @@ impl App {
         &[
             ("Appearance", &[Palette, Skin, Highlight]),
             ("Search", &[SearchDelay, CollapseRepos, GroupVariants]),
-            ("Manage", &[RemoveDepth, AurHelper, FlatpakAppId]),
+            ("Manage", &[RemoveDepth, AurHelper, FlatpakAppId, FloatUpdates]),
             ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
         ]
@@ -510,6 +509,10 @@ impl App {
             OptionId::CollapseRepos => self.settings.collapse_repos = !self.settings.collapse_repos,
             OptionId::GroupVariants => self.settings.group_variants = !self.settings.group_variants,
             OptionId::FlatpakAppId => self.settings.flatpak_app_id = !self.settings.flatpak_app_id,
+            OptionId::FloatUpdates => {
+                self.manage_float_updates = !self.manage_float_updates;
+                self.settings.default_manage_float_updates = self.manage_float_updates;
+            }
             OptionId::Palette => self.cycle_palette(),
             OptionId::Skin => self.cycle_skin(),
             OptionId::Highlight => self.settings.highlight = self.settings.highlight.next(),
@@ -896,11 +899,6 @@ impl App {
         }
     }
 
-    /// Toggle whether upgradable packages float to the top of the Manage list.
-    pub fn toggle_float_updates(&mut self) {
-        self.manage_float_updates = !self.manage_float_updates;
-    }
-
     /// The label shown for an installed package in the Manage list: the human
     /// name normally, or the reverse-DNS app ID for Flatpak when the
     /// `flatpak_app_id` option is on.
@@ -1026,11 +1024,6 @@ impl App {
                     id: FilterId::Sort(k),
                 });
             }
-            rows.push(FilterRow {
-                label: "float updates to top".to_string(),
-                checked: self.manage_float_updates,
-                id: FilterId::FloatUpdates,
-            });
         }
         // Action row: save the current filter as the launch default.
         rows.push(FilterRow {
@@ -1074,7 +1067,6 @@ impl App {
             FilterId::Flatpak => self.toggle_repo_off("flatpak"),
             FilterId::Reason(r) => self.manage_reason = r, // radio: select
             FilterId::Sort(k) => self.select_sort(k),      // radio, or flip dir
-            FilterId::FloatUpdates => self.toggle_float_updates(),
             FilterId::SaveDefault => {
                 self.save_filter_default();
                 return; // not a filter change; nothing to re-clamp
@@ -1101,7 +1093,6 @@ impl App {
                 self.settings.default_reason = self.manage_reason;
                 self.settings.default_manage_sort_key = self.manage_sort_key;
                 self.settings.default_manage_sort_dir = self.manage_sort_dir;
-                self.settings.default_manage_float_updates = self.manage_float_updates;
                 "Manage"
             }
             _ => {
@@ -1362,6 +1353,19 @@ mod tests {
     }
 
     #[test]
+    fn float_updates_is_an_option_not_a_filter_row() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.active_view = ActiveView::Manage;
+        assert!(!app.filter_checkboxes().iter().any(|r| r.label.contains("float")));
+        let before = app.manage_float_updates;
+        app.options_selected =
+            App::flat_options().iter().position(|o| *o == OptionId::FloatUpdates).unwrap();
+        app.toggle_option();
+        assert_eq!(app.manage_float_updates, !before);
+        assert_eq!(app.settings.default_manage_float_updates, !before);
+    }
+
+    #[test]
     fn filter_box_has_sort_rows_in_manage() {
         let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
         app.active_view = ActiveView::Manage;
@@ -1369,7 +1373,6 @@ mod tests {
         assert!(rows.iter().any(|r| r.id == FilterId::Sort(SortKey::Name)));
         assert!(rows.iter().any(|r| r.id == FilterId::Sort(SortKey::Size)));
         assert!(rows.iter().any(|r| r.id == FilterId::Sort(SortKey::Updated)));
-        assert!(rows.iter().any(|r| r.id == FilterId::FloatUpdates));
         let name_row = rows.iter().find(|r| r.id == FilterId::Sort(SortKey::Name)).unwrap();
         assert!(name_row.checked); // active key is checked
         app.active_view = ActiveView::Search;

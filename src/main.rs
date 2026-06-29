@@ -691,6 +691,13 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
+    // `u` jumps to the sidebar upgrade block from anywhere (unless typing in the
+    // search field). The cursor lands on `total`, so a following Enter upgrades all.
+    if key.code == KeyCode::Char('u') && !(app.focus == Focus::Search && app.interacting) {
+        jump_to_upgrade(app);
+        return;
+    }
+
     // Two modes: navigate (move the hovered panel) and interact (act inside the
     // focused panel). Enter/Space activates; Esc steps back out.
     if app.interacting {
@@ -976,7 +983,6 @@ fn interact_list(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
-        KeyCode::Char('u') => jump_to_upgrade(app),
         KeyCode::Enter => {
             if let Some(pkg) = app.selected_installed() {
                 if app.update_for(&pkg.name).is_some() {

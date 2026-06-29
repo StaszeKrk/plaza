@@ -982,19 +982,36 @@ fn interact_scope(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Interact: the Manage installed list. j/k move, Enter/`r` remove, `u` upgrade
-/// the highlighted package (when it has a pending update).
+/// Interact: the Manage installed list. j/k move, Enter upgrades-or-removes,
+/// `r` removes, `u` jumps focus to the sidebar upgrade block.
 fn interact_list(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
-        KeyCode::Char('u') if app.selected_installed().is_some() => request_upgrade_one(app),
-        KeyCode::Enter | KeyCode::Char('r') if app.selected_installed().is_some() => {
-            request_remove(app)
+        KeyCode::Char('u') => jump_to_upgrade(app),
+        KeyCode::Enter if app.selected_installed().is_some() => {
+            let upgradable = app
+                .selected_installed()
+                .map(|p| app.update_for(&p.name).is_some())
+                .unwrap_or(false);
+            if upgradable {
+                request_upgrade_one(app)
+            } else {
+                request_remove(app)
+            }
         }
+        KeyCode::Char('r') if app.selected_installed().is_some() => request_remove(app),
         KeyCode::Esc => app.interacting = false,
         _ => {}
     }
+}
+
+/// Jump focus to the sidebar upgrade block, cursor on the "total" row, so the
+/// next Enter upgrades everything.
+fn jump_to_upgrade(app: &mut App) {
+    app.sidebar_selected = app.sidebar_total_row();
+    app.focus = Focus::Sidebar;
+    app.interacting = true;
 }
 
 /// Interact: the repo-filter box. j/k move, space/Enter toggle the checkbox,

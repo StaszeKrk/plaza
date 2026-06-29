@@ -107,7 +107,7 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
         crate::model::ReasonFilter::All => String::new(),
         r => format!("· {} ", r.label()),
     };
-    let hints = if app.settings.show_hotkeys { "· ⏎/r remove · u upgrade " } else { "" };
+    let hints = if app.settings.show_hotkeys { "· \u{23ce} upgrade/remove · r remove · u all " } else { "" };
     let title = if app.manage_filter.is_empty() {
         format!(" installed ({}) {reason}{hints}", rows.len())
     } else {

@@ -1,6 +1,6 @@
 [package]
 name = "plaza"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Cross-distro TUI package manager browser"
 license = "GPL-3.0-or-later"

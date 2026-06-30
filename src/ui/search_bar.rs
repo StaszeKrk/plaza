@@ -16,6 +16,6 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(app.search_text().to_string(), Style::default().fg(pal.fg)),
         Span::styled(cursor.to_string(), Style::default().fg(pal.accent)),
     ]);
-    let p = Paragraph::new(line).block(crate::ui::themed_block(app, border, " Plaza "));
+    let p = Paragraph::new(line).block(crate::ui::themed_block(app, border, " Search "));
     frame.render_widget(p, area);
 }

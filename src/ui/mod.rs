@@ -362,11 +362,15 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
             i += 1;
         }
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  \u{2191}\u{2193} move \u{b7} space toggle/cycle \u{b7} esc close",
-        Style::default().fg(app.palette.muted),
-    )));
+    // The keybind hint line honors the same "Show hotkey hints" toggle as the
+    // status bar and the other panes; with hints off, the overlay drops it too.
+    if app.settings.show_hotkeys {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  \u{2191}\u{2193} move \u{b7} space toggle/cycle \u{b7} esc close",
+            Style::default().fg(app.palette.muted),
+        )));
+    }
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = centered_rect(46, height, area);

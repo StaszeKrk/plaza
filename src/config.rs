@@ -100,25 +100,54 @@ fn config_path() -> Option<PathBuf> {
     Some(config_base()?.join("plaza").join("settings.json"))
 }
 
+/// Parse a settings file, recovering as much as possible when it does not fully
+/// deserialize. A clean parse is returned as-is. Otherwise (a field renamed,
+/// retyped, or carrying a now-invalid enum value across a plaza upgrade) each
+/// stored field is reapplied one at a time and kept only if it still
+/// deserializes, so a single incompatible field can no longer wipe the whole
+/// config. Missing fields fall back to their defaults via `#[serde(default)]`.
+fn parse_or_recover(s: &str) -> Settings {
+    if let Ok(settings) = serde_json::from_str::<Settings>(s) {
+        return settings;
+    }
+    let Ok(serde_json::Value::Object(stored)) = serde_json::from_str::<serde_json::Value>(s) else {
+        return Settings::default();
+    };
+    let mut kept = serde_json::Map::new();
+    for (key, value) in stored {
+        let mut trial = kept.clone();
+        trial.insert(key.clone(), value.clone());
+        if serde_json::from_value::<Settings>(serde_json::Value::Object(trial)).is_ok() {
+            kept.insert(key, value);
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(kept)).unwrap_or_default()
+}
+
 impl Settings {
     pub fn load() -> Settings {
         let Some(path) = config_path() else {
             return Settings::default();
         };
         match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Ok(s) => parse_or_recover(&s),
             Err(_) => Settings::default(),
         }
     }
 
     /// Best-effort persist; failures are ignored (options still apply in-session).
+    /// Writes to a sibling temp file and renames it into place so a crash mid-write
+    /// cannot truncate an existing config into an empty/partial file (which would
+    /// then load as all-defaults).
     pub fn save(&self) {
         let Some(path) = config_path() else { return };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(&path, s);
+        let Ok(s) = serde_json::to_string_pretty(self) else { return };
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &s).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }
@@ -132,6 +161,45 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.palette, "plaza-dusk");
         assert_eq!(s.skin, "soft");
+    }
+
+    #[test]
+    fn one_unparseable_field_does_not_wipe_the_rest() {
+        // A settings file from a plaza version whose schema differs: one field
+        // (here `highlight`) carries a value this build cannot deserialize. The
+        // whole config must not reset to default; every still-valid field is kept
+        // and only the bad one falls back. This is the "options reset to default
+        // after upgrading plaza" guard.
+        let json = r#"{
+            "show_hotkeys": false,
+            "palette": "catppuccin-mocha",
+            "skin": "sharp",
+            "debounce_ms": 250,
+            "highlight": "ThisVariantNoLongerExists",
+            "default_manage_sort_key": "Size"
+        }"#;
+        let s = parse_or_recover(json);
+        assert!(!s.show_hotkeys, "show_hotkeys was wiped");
+        assert_eq!(s.palette, "catppuccin-mocha", "palette was wiped");
+        assert_eq!(s.skin, "sharp", "skin was wiped");
+        assert_eq!(s.debounce_ms, 250, "debounce_ms was wiped");
+        assert_eq!(s.default_manage_sort_key, SortKey::Size, "sort key was wiped");
+        // The single bad field falls back to its default.
+        assert_eq!(s.highlight, HighlightMode::default());
+    }
+
+    #[test]
+    fn fully_valid_file_parses_through_recover_unchanged() {
+        let s = Settings { palette: "nord".into(), show_hotkeys: false, ..Default::default() };
+        let json = serde_json::to_string(&s).unwrap();
+        let back = parse_or_recover(&json);
+        assert_eq!(back.palette, "nord");
+        assert!(!back.show_hotkeys);
+    }
+
+    #[test]
+    fn garbage_file_falls_back_to_default() {
+        assert_eq!(parse_or_recover("not json at all").palette, Settings::default().palette);
     }
 
     #[test]

@@ -60,6 +60,9 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
         task_pane::draw_overlay(frame, app, area);
     }
 
+    if app.manage_menu.is_some() {
+        draw_manage_menu(frame, app, area);
+    }
     if app.confirm.is_some() {
         draw_confirm(frame, app, area);
     }
@@ -377,6 +380,46 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(lines).block(themed_block(app, app.palette.accent, " Options ")),
+        rect,
+    );
+}
+
+/// The per-package Manage menu overlay (Enter on an upgradable row): a small
+/// chooser of Upgrade / Remove / Cancel. Selecting an action opens the normal
+/// confirm modal, so the command preview and final y/n are unchanged.
+fn draw_manage_menu(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(menu) = &app.manage_menu else { return };
+    let labels = [
+        format!("[u] Upgrade to {}", menu.new_version),
+        "[r] Remove from system".to_string(),
+        "[c] Cancel".to_string(),
+    ];
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, label) in labels.iter().enumerate() {
+        let selected = i == menu.selected.min(labels.len() - 1);
+        let marker = if selected { cursor_symbol(app) } else { "  ".to_string() };
+        let style = if selected {
+            highlight_style(app)
+        } else {
+            Style::default().fg(app.palette.fg)
+        };
+        lines.push(Line::from(Span::styled(format!("{marker}{label}"), style)));
+    }
+    if app.settings.show_hotkeys {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  \u{2191}\u{2193} move \u{b7} \u{23ce} select \u{b7} esc cancel",
+            Style::default().fg(app.palette.muted),
+        )));
+    }
+
+    let title = format!(" manage {} ", menu.pkg);
+    let width = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 4;
+    let height = lines.len() as u16 + 2;
+    let rect = centered_rect(width.max(40), height, area);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(themed_block(app, app.palette.accent, title)),
         rect,
     );
 }

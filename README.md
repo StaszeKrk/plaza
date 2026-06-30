@@ -55,9 +55,10 @@ Manage:
   press Enter on a source row to upgrade that source, or Enter on the `total`
   row to upgrade all. "All" chains each source in one task (`sudo pacman -Syu &&
   paru -Sua`, using whichever AUR helper you have). Press Enter on an upgradable
-  package in the Manage list to upgrade just that package, or `u` from anywhere
-  to jump focus to the sidebar upgrade block (cursor on `total`, so a following
-  Enter upgrades all).
+  package in the Manage list to open a small menu (upgrade just that package,
+  remove it, or cancel); for an up-to-date package Enter goes straight to remove.
+  Press `u` from anywhere to jump focus to the sidebar upgrade block (cursor on
+  `total`, so a following Enter upgrades all).
 - Shows a detail pane beside the list (`pacman -Qi` for the highlighted package):
   version, install date, build date, size, install reason (explicit or
   dependency), what requires it, and what it depends on. Loaded as the selection
@@ -155,7 +156,7 @@ Plaza has two modes, like a tiling layout you tab around:
 | s (in the filter box) | save the current view's filter (repos, plus reason and sort in Manage) as its launch default |
 | Enter (on a result) | open it, then Enter on a source to install |
 | r (in Manage list) | remove the selected package |
-| Enter (in Manage list) | upgrade the package if it has a pending update, else remove it |
+| Enter (in Manage list) | open the action menu (upgrade/remove/cancel) if the package has a pending update, else remove it |
 | u | jump to the sidebar upgrade block from anywhere (cursor on `total`, so Enter upgrades all) |
 | Enter (on a sidebar upgrade row) | upgrade that source; Enter on the `total` row upgrades all |
 | backtick | open or collapse the action pane |

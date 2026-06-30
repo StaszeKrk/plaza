@@ -110,6 +110,34 @@ pub enum SidebarAction {
     SwitchView,
 }
 
+/// One choice in the per-package Manage menu (see [`ManageMenu`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuAction {
+    Upgrade,
+    Remove,
+    Cancel,
+}
+
+/// The per-package action chooser shown on Enter over an upgradable Manage row.
+/// It offers Upgrade / Remove / Cancel; choosing one funnels into the normal
+/// confirm modal, so the final y/n step (and its command preview) is unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManageMenu {
+    pub pkg: String,
+    pub new_version: String,
+    pub selected: usize,
+}
+
+impl ManageMenu {
+    pub const ACTIONS: [MenuAction; 3] =
+        [MenuAction::Upgrade, MenuAction::Remove, MenuAction::Cancel];
+
+    /// The action under the cursor.
+    pub fn action(&self) -> MenuAction {
+        Self::ACTIONS[self.selected.min(Self::ACTIONS.len() - 1)]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MainView {
     Results,
@@ -296,6 +324,9 @@ pub struct App {
     pub has_checkupdates: bool,
     pub confirm: Option<ActionSpec>,
     pub confirm_note: Option<String>,
+    /// Per-package action chooser, opened by Enter on an upgradable Manage row so
+    /// Enter never silently guesses upgrade-vs-remove. `None` when closed.
+    pub manage_menu: Option<ManageMenu>,
     pub task: Option<ActiveTask>,
     /// Pending actions, drained one at a time after the running `task` finishes.
     pub queue: VecDeque<ActionSpec>,
@@ -405,6 +436,7 @@ impl App {
             has_checkupdates: false,
             confirm: None,
             confirm_note: None,
+            manage_menu: None,
             task: None,
             queue: VecDeque::new(),
             queue_paused: false,
@@ -491,6 +523,32 @@ impl App {
     pub fn clear_confirm(&mut self) {
         self.confirm = None;
         self.confirm_note = None;
+    }
+
+    /// Open the per-package action menu for the highlighted Manage row, but only
+    /// when it has a pending update. Returns false (and opens nothing) otherwise,
+    /// so the caller can fall back to a direct remove for an up-to-date package.
+    pub fn open_manage_menu(&mut self) -> bool {
+        let Some(pkg) = self.selected_installed() else { return false };
+        let Some(version) = self.update_for(&pkg.name) else { return false };
+        self.manage_menu = Some(ManageMenu {
+            pkg: pkg.name.clone(),
+            new_version: version.to_string(),
+            selected: 0,
+        });
+        true
+    }
+
+    /// Move the Manage menu cursor, clamped to the action list.
+    pub fn move_manage_menu(&mut self, delta: i32) {
+        if let Some(menu) = &mut self.manage_menu {
+            let max = ManageMenu::ACTIONS.len() as i32 - 1;
+            menu.selected = (menu.selected as i32 + delta).clamp(0, max) as usize;
+        }
+    }
+
+    pub fn close_manage_menu(&mut self) {
+        self.manage_menu = None;
     }
 
     // --- Options overlay ---
@@ -1665,6 +1723,52 @@ mod tests {
         app.manage_filter = "fire".into();
         let rows: Vec<&str> = app.manage_rows().iter().map(|p| p.name.as_str()).collect();
         assert_eq!(rows, vec!["firewalld", "firefox"]);
+    }
+
+    #[test]
+    fn manage_menu_opens_only_for_upgradable() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.installed_list = vec![ipkg("firefox"), ipkg("firewalld")];
+        app.updates_list = vec![UpdateEntry {
+            name: "firewalld".into(),
+            old_version: "1".into(),
+            new_version: "2".into(),
+            source_id: SourceId::Pacman,
+        }];
+        // upgradable row floats to the top.
+        app.installed_selected = 0;
+        assert!(app.open_manage_menu());
+        let menu = app.manage_menu.as_ref().unwrap();
+        assert_eq!(menu.pkg, "firewalld");
+        assert_eq!(menu.new_version, "2");
+        assert_eq!(menu.action(), MenuAction::Upgrade);
+        app.close_manage_menu();
+        assert!(app.manage_menu.is_none());
+
+        // a row with no pending update does not open the menu.
+        app.installed_selected = 1;
+        assert!(!app.open_manage_menu());
+        assert!(app.manage_menu.is_none());
+    }
+
+    #[test]
+    fn manage_menu_move_clamps_and_maps_actions() {
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.installed_list = vec![ipkg("firewalld")];
+        app.updates_list = vec![UpdateEntry {
+            name: "firewalld".into(),
+            old_version: "1".into(),
+            new_version: "2".into(),
+            source_id: SourceId::Pacman,
+        }];
+        app.open_manage_menu();
+        assert_eq!(app.manage_menu.as_ref().unwrap().action(), MenuAction::Upgrade);
+        app.move_manage_menu(1);
+        assert_eq!(app.manage_menu.as_ref().unwrap().action(), MenuAction::Remove);
+        app.move_manage_menu(5); // clamps at the last action
+        assert_eq!(app.manage_menu.as_ref().unwrap().action(), MenuAction::Cancel);
+        app.move_manage_menu(-9); // clamps at the first
+        assert_eq!(app.manage_menu.as_ref().unwrap().action(), MenuAction::Upgrade);
     }
 
     #[test]

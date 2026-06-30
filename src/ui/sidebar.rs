@@ -1,5 +1,5 @@
 use crate::app::{App, Focus};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -68,7 +68,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    // VIEWS nav (anchored at the bottom so it is always visible).
+    // VIEWS nav, kept directly under the stats block near the top.
     let mut nav = vec![head("VIEWS")];
     let active_idx = app.active_view.index();
     for (i, v) in views.iter().enumerate() {
@@ -92,14 +92,14 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let block = crate::ui::themed_block(app, border, " plaza ");
+    let block = crate::ui::themed_block(app, border, " System ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let nav_h = nav.len() as u16;
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(nav_h)])
-        .split(inner);
-    frame.render_widget(Paragraph::new(stats), chunks[0]);
-    frame.render_widget(Paragraph::new(nav), chunks[1]);
+    // Stats then VIEWS flow from the top as one column, with a blank spacer
+    // between, so VIEWS stays in the natural eye line instead of sinking to the
+    // bottom of a tall (filter-hidden) sidebar.
+    let mut lines = stats;
+    lines.push(Line::from(""));
+    lines.extend(nav);
+    frame.render_widget(Paragraph::new(lines), inner);
 }

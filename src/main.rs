@@ -12,7 +12,7 @@ mod theme;
 mod ui;
 
 use crate::action::runner::{key_to_bytes, start_action, TaskState};
-use crate::app::{ActiveView, App, Dir, Focus, MainView, SidebarAction, TaskView};
+use crate::app::{ActiveView, App, Dir, Focus, MainView, MenuAction, SidebarAction, TaskView};
 use crate::event::AppEvent;
 use crate::model::{Action, ActionSpec, SourceId};
 use crate::sources::Source;
@@ -690,6 +690,13 @@ fn handle_key(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
         return;
     }
 
+    // The per-package Manage menu captures input while open (before the global
+    // `u`/`f`/`/` shortcuts, so its own keys are not stolen).
+    if app.manage_menu.is_some() {
+        handle_manage_menu_key(app, key);
+        return;
+    }
+
     // Backtick: show+expand the task pane, or collapse an expanded one to a peek.
     if key.code == KeyCode::Char('`') {
         toggle_task_pane(app);
@@ -1017,24 +1024,50 @@ fn interact_main(app: &mut App, key: KeyEvent, tx: &UnboundedSender<AppEvent>) {
     }
 }
 
-/// Interact: the Manage installed list. j/k move, Enter upgrades-or-removes,
-/// `r` removes, `u` jumps focus to the sidebar upgrade block.
+/// Interact: the Manage installed list. j/k move, Enter opens the action menu on
+/// an upgradable package (else removes), `r` removes, `u` (handled globally)
+/// jumps focus to the sidebar upgrade block.
 fn interact_list(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => app.move_installed(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_installed(1),
         KeyCode::Enter => {
-            if let Some(pkg) = app.selected_installed() {
-                if app.update_for(&pkg.name).is_some() {
-                    request_upgrade_one(app)
-                } else {
-                    request_remove(app)
-                }
+            // Upgradable: open the menu so Enter never guesses upgrade-vs-remove.
+            // Up to date: there is only one action, so go straight to remove.
+            if !app.open_manage_menu() && app.selected_installed().is_some() {
+                request_remove(app)
             }
         }
         KeyCode::Char('r') if app.selected_installed().is_some() => request_remove(app),
         KeyCode::Esc => app.interacting = false,
         _ => {}
+    }
+}
+
+/// The per-package Manage menu: pick Upgrade / Remove / Cancel. Choosing an
+/// action closes the menu and opens the normal confirm modal for it.
+fn handle_manage_menu_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.move_manage_menu(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_manage_menu(1),
+        KeyCode::Char('u') => choose_manage_menu(app, MenuAction::Upgrade),
+        KeyCode::Char('r') => choose_manage_menu(app, MenuAction::Remove),
+        KeyCode::Char('c') | KeyCode::Esc => app.close_manage_menu(),
+        KeyCode::Enter => {
+            if let Some(action) = app.manage_menu.as_ref().map(|m| m.action()) {
+                choose_manage_menu(app, action);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn choose_manage_menu(app: &mut App, action: MenuAction) {
+    app.close_manage_menu();
+    match action {
+        MenuAction::Upgrade => request_upgrade_one(app),
+        MenuAction::Remove => request_remove(app),
+        MenuAction::Cancel => {}
     }
 }
 

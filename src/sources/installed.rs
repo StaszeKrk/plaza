@@ -238,6 +238,79 @@ pub fn parse_installed_list(
     list
 }
 
+/// Package name from a `/var/lib/dpkg/info` filename: strip the `.list`
+/// extension and any `:arch` multi-arch suffix. Non-`.list` names are returned
+/// unchanged (the caller only feeds `.list` files).
+pub fn dpkg_info_name(file_name: &str) -> &str {
+    match file_name.strip_suffix(".list") {
+        Some(stem) => stem.split(':').next().unwrap_or(stem),
+        None => file_name,
+    }
+}
+
+/// Build the installed list from `dpkg-query -W -f='${Package}\t${Version}\t
+/// ${Installed-Size}\n'`, flagging explicit (`apt-mark showmanual`) and orphan
+/// (`apt list '?autoremovable'`). Size is KiB in dpkg, stored as bytes. Origin is
+/// the flat "apt". Sorted by name. `install_date` is filled later from mtimes.
+pub fn parse_installed_apt(
+    dpkg: &str,
+    manual: &std::collections::HashSet<String>,
+    autoremovable: &std::collections::HashSet<String>,
+) -> Vec<InstalledPkg> {
+    let mut list: Vec<InstalledPkg> = dpkg
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let name = parts.next()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let version = parts.next().unwrap_or_default().trim().to_string();
+            let size = parts
+                .next()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(|kib| kib * 1024);
+            Some(InstalledPkg {
+                explicit: manual.contains(name),
+                orphan: autoremovable.contains(name),
+                display: name.to_string(),
+                name: name.to_string(),
+                version,
+                origin: "apt".to_string(),
+                size,
+                install_date: None,
+            })
+        })
+        .collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    list
+}
+
+/// Map package name -> last install/upgrade time (epoch secs) from the mtimes of
+/// `<dir>/*.list` files. dpkg rewrites a package's `.list` on install/upgrade. A
+/// missing/unreadable dir yields an empty map (dates just stay None).
+pub fn read_dpkg_info_mtimes(dir: &std::path::Path) -> HashMap<String, i64> {
+    let mut map = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return map;
+    };
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let Some(file) = file.to_str() else { continue };
+        if !file.ends_with(".list") {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if let Ok(mtime) = meta.modified() {
+                if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
+                    map.insert(dpkg_info_name(file).to_string(), dur.as_secs() as i64);
+                }
+            }
+        }
+    }
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,6 +435,33 @@ Install Reason  : Explicitly installed
         let d = parse_pkg_detail(qi);
         assert_eq!(d.required_by, vec!["aaa", "bbb", "ccc", "ddd"]);
         assert_eq!(d.size, "1 MiB");
+    }
+
+    #[test]
+    fn dpkg_info_name_strips_list_and_arch() {
+        assert_eq!(dpkg_info_name("bash.list"), "bash");
+        assert_eq!(dpkg_info_name("libc6:amd64.list"), "libc6");
+        assert_eq!(dpkg_info_name("foo.md5sums"), "foo.md5sums"); // not a .list, unchanged
+    }
+
+    #[test]
+    fn parse_installed_apt_flags_and_size() {
+        let dpkg = "bash\t5.2-3\t2048\nlibfoo\t1.0\t512\nvim\t9.0\t1024\n";
+        let manual: std::collections::HashSet<String> =
+            ["bash".to_string(), "vim".to_string()].into_iter().collect();
+        let autoremovable: std::collections::HashSet<String> =
+            ["libfoo".to_string()].into_iter().collect();
+        let list = parse_installed_apt(dpkg, &manual, &autoremovable);
+        assert_eq!(list.len(), 3);
+        let by = |n: &str| list.iter().find(|p| p.name == n).unwrap().clone();
+        assert_eq!(by("bash").origin, "apt");
+        assert_eq!(by("bash").display, "bash");
+        assert_eq!(by("bash").version, "5.2-3");
+        assert_eq!(by("bash").size, Some(2048 * 1024)); // KiB -> bytes
+        assert!(by("bash").explicit && !by("bash").orphan);
+        assert!(by("libfoo").orphan && !by("libfoo").explicit);
+        assert!(by("vim").explicit);
+        assert!(parse_installed_apt("", &manual, &autoremovable).is_empty());
     }
 
     #[test]

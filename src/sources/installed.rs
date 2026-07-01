@@ -286,6 +286,19 @@ pub fn parse_installed_apt(
     list
 }
 
+/// Extract package names from `apt list <pattern>` output (`name/suite ver arch
+/// [flags]` per line), skipping the `Listing...` header (which has no `/`). Used
+/// for the orphan set from `apt list '?autoremovable'`.
+pub fn parse_apt_list_names(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter(|l| l.contains('/'))
+        .filter_map(|l| l.split('/').next())
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
 /// Map package name -> last install/upgrade time (epoch secs) from the mtimes of
 /// `<dir>/*.list` files. dpkg rewrites a package's `.list` on install/upgrade. A
 /// missing/unreadable dir yields an empty map (dates just stay None).
@@ -435,6 +448,13 @@ Install Reason  : Explicitly installed
         let d = parse_pkg_detail(qi);
         assert_eq!(d.required_by, vec!["aaa", "bbb", "ccc", "ddd"]);
         assert_eq!(d.size, "1 MiB");
+    }
+
+    #[test]
+    fn parse_apt_list_names_skips_header() {
+        let out = "Listing...\nlibfoo/now 1.0 amd64 [installed,auto]\nvim/stable 9.0 amd64 [installed]\n";
+        assert_eq!(parse_apt_list_names(out), vec!["libfoo", "vim"]);
+        assert!(parse_apt_list_names("Listing...\n").is_empty());
     }
 
     #[test]

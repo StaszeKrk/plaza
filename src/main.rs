@@ -399,6 +399,38 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
                 pkg.install_date = *date;
             }
         }
+        // Append installed apt packages (Debian; origin "apt") with explicit /
+        // orphan flags, size, and last-install date from dpkg info mtimes. The
+        // pacman branch above is empty on a non-Arch box, so this fills the list.
+        if sources::which("apt-get") {
+            let text = |out: std::io::Result<std::process::Output>| {
+                out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+            };
+            let dpkg = text(
+                Command::new("dpkg-query")
+                    .args(["-W", "-f=${Package}\t${Version}\t${Installed-Size}\n"])
+                    .output()
+                    .await,
+            );
+            let manual: std::collections::HashSet<String> =
+                sources::installed::name_set(&apt_manual_text().await);
+            let autoremovable: std::collections::HashSet<String> =
+                sources::installed::parse_apt_list_names(&apt_autoremovable_text().await)
+                    .into_iter()
+                    .collect();
+            let mut apt_list =
+                sources::installed::parse_installed_apt(&dpkg, &manual, &autoremovable);
+            let dates = tokio::task::spawn_blocking(|| {
+                sources::installed::read_dpkg_info_mtimes(std::path::Path::new("/var/lib/dpkg/info"))
+            })
+            .await
+            .unwrap_or_default();
+            for pkg in apt_list.iter_mut() {
+                pkg.install_date = dates.get(&pkg.name).copied();
+            }
+            list.extend(apt_list);
+            list.sort_by(|a, b| a.name.cmp(&b.name));
+        }
         // Append installed Flatpak apps (origin "flatpak"); size came from the
         // list column, the date is the deploy dir mtime. Then re-sort by name.
         if flatpak {
@@ -504,6 +536,29 @@ async fn run_count(args: &[&str]) -> usize {
 async fn apt_installed_text() -> String {
     match Command::new("dpkg-query")
         .args(["-W", "-f=${Package}\t${Version}\n"])
+        .output()
+        .await
+    {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(_) => String::new(),
+    }
+}
+
+/// `apt-mark showmanual` output (explicitly-installed package names, one per
+/// line), or empty on failure. Feeds the `explicit` flag in the Manage list.
+async fn apt_manual_text() -> String {
+    match Command::new("apt-mark").arg("showmanual").output().await {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(_) => String::new(),
+    }
+}
+
+/// `apt list '?autoremovable'` stdout: auto-installed packages no longer required
+/// (the orphan set), or empty on failure.
+async fn apt_autoremovable_text() -> String {
+    match Command::new("apt")
+        .env("LC_ALL", "C")
+        .args(["list", "?autoremovable"])
         .output()
         .await
     {

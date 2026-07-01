@@ -4,23 +4,26 @@
 
 Plaza is a customizable and riceable terminal UI for finding, installing, and managing packages. You search
 once and it queries every package source on the system at the same time. On Arch
-that means the official repositories and the AUR. Results are merged into one list,
-so a package name shows up once even when several sources provide it. A separate
-Manage view lists everything installed, shows what has updates, and lets you remove
-or upgrade without leaving Plaza. Actions run in a background pane backed by a real
-terminal, so you can keep working while one runs.
+that means the official repositories and the AUR; on Debian it means apt. Results
+are merged into one list, so a package name shows up once even when several sources
+provide it. A separate Manage view lists everything installed, shows what has
+updates, and lets you remove or upgrade without leaving Plaza. Actions run in a
+background pane backed by a real terminal, so you can keep working while one runs.
 
-Plaza is Arch-focused (pacman and the AUR) and also searches Flatpak (Flathub)
-when it is set up. The source backends sit behind a trait, so apt, dnf, zypper,
-and snap can be added later.
+Plaza supports Arch (pacman and the AUR) and Debian (apt), and also searches
+Flatpak (Flathub) when it is set up. The source backends sit behind a trait, so
+dnf, zypper, and snap can be added later. Search, detail, and install work for
+every enabled source; the Manage view (installed list, removal, per-source
+upgrade) currently covers pacman, the AUR, and Flatpak, with apt Manage support
+in progress.
 
 ## What it does
 
 Search:
 
-- Queries all sources at once: the official repos, the AUR, and Flatpak
-  (Flathub) when it is configured. Packages with the same name across sources are
-  merged into one row.
+- Queries all sources at once: the official repos and the AUR on Arch, apt on
+  Debian, and Flatpak (Flathub) when it is configured. Packages with the same name
+  across sources are merged into one row.
 - Groups name variants (`gimp`, `gimp-bin`, `gimp-git`) and a name-matching
   Flatpak into a single row, so you pick the edition from the detail view.
   Matching uses the Flatpak app ID, then a normalized name, so a Flatpak whose

@@ -62,6 +62,7 @@ fn draw_manage(frame: &mut Frame, app: &App, area: Rect) {
             let (label, src) = match pk.origin.as_str() {
                 "aur" => ("aur", SourceId::Aur),
                 "flatpak" => ("flatpak", SourceId::Flatpak),
+                "apt" => ("apt", SourceId::Apt),
                 _ => ("official", SourceId::Pacman),
             };
             spans.push(crate::ui::badge_span(app, label, src, 1));

@@ -701,11 +701,14 @@ fn dispatch_manage_detail(app: &mut App, tx: &UnboundedSender<AppEvent>) {
         return;
     }
     app.manage_detail_inflight.insert(name.clone());
-    // Flatpak apps are not in the pacman db: `flatpak info` instead of `pacman -Qi`.
-    let is_flatpak = pkg.origin == "flatpak";
+    // Route by origin: Flatpak apps use `flatpak info`, apt packages `dpkg -s`,
+    // everything else `pacman -Qi`. The explicit flag is only reliably known from
+    // the installed list, so carry it into the apt detail.
+    let origin = pkg.origin.clone();
+    let explicit = pkg.explicit;
     let tx = tx.clone();
     tokio::spawn(async move {
-        let detail = if is_flatpak {
+        let detail = if origin == "flatpak" {
             let out = Command::new("flatpak")
                 .env("LC_ALL", "C")
                 .args(["info", &name])
@@ -713,6 +716,12 @@ fn dispatch_manage_detail(app: &mut App, tx: &UnboundedSender<AppEvent>) {
                 .await;
             let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
             sources::flatpak::parse_info(&text)
+        } else if origin == "apt" {
+            let out = Command::new("dpkg").args(["-s", &name]).output().await;
+            let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+            let mut d = sources::installed::parse_dpkg_status(&text);
+            d.explicit = explicit;
+            d
         } else {
             let out = Command::new("pacman").arg("-Qi").arg(&name).output().await;
             let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();

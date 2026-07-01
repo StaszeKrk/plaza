@@ -1083,24 +1083,28 @@ impl App {
     /// `aur`. The `aur` row appears only when the AUR source is present.
     pub fn filter_checkboxes(&self) -> Vec<FilterRow> {
         let mut rows = Vec::new();
-        if self.settings.collapse_repos {
-            rows.push(FilterRow {
-                label: "repo".into(),
-                checked: self.pacman_master_checked(),
-                id: FilterId::Master,
-            });
-        } else {
-            rows.push(FilterRow {
-                label: "all repos".into(),
-                checked: self.pacman_master_checked(),
-                id: FilterId::Master,
-            });
-            for r in &self.filter_repos {
+        // The pacman repo master (and per-repo rows) only make sense on Arch; on a
+        // non-Arch box there are no pacman repos, so skip them entirely.
+        if self.pacman_present {
+            if self.settings.collapse_repos {
                 rows.push(FilterRow {
-                    label: r.clone(),
-                    checked: self.repo_shown(r),
-                    id: FilterId::Repo(r.clone()),
+                    label: "repo".into(),
+                    checked: self.pacman_master_checked(),
+                    id: FilterId::Master,
                 });
+            } else {
+                rows.push(FilterRow {
+                    label: "all repos".into(),
+                    checked: self.pacman_master_checked(),
+                    id: FilterId::Master,
+                });
+                for r in &self.filter_repos {
+                    rows.push(FilterRow {
+                        label: r.clone(),
+                        checked: self.repo_shown(r),
+                        id: FilterId::Repo(r.clone()),
+                    });
+                }
             }
         }
         if self.present_sources().contains(&SourceId::Aur) {
@@ -2139,6 +2143,7 @@ mod tests {
 
     fn app_with_repos() -> App {
         let mut app = App::with_settings(vec![SourceId::Pacman, SourceId::Aur], Settings::default());
+        app.pacman_present = true; // pacman repo filter rows only show on Arch
         app.filter_repos = vec!["extra".into(), "world".into(), "multilib".into()];
         app
     }

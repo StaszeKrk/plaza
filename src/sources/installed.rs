@@ -93,6 +93,53 @@ pub fn parse_pkg_detail(qi: &str) -> PkgDetail {
     }
 }
 
+/// Parse `dpkg -s <pkg>` (RFC822 status) into the Manage detail pane. Only header
+/// lines are read; indented long-description continuations are ignored, so
+/// `Description` yields the short synopsis. Reverse deps, build date, and install
+/// date are not in dpkg status, so those stay empty (the caller fills `explicit`
+/// and `install_date` from the installed list).
+pub fn parse_dpkg_status(text: &str) -> PkgDetail {
+    let mut fields: HashMap<String, String> = HashMap::new();
+    for line in text.lines() {
+        if line.starts_with(char::is_whitespace) {
+            continue; // long-description continuation
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            fields.entry(k.trim().to_string()).or_insert_with(|| v.trim().to_string());
+        }
+    }
+    let get = |k: &str| fields.get(k).cloned().unwrap_or_default();
+    let depends = {
+        let d = get("Depends");
+        if d.is_empty() {
+            Vec::new()
+        } else {
+            d.split(',')
+                .map(|e| e.split('(').next().unwrap_or("").trim().to_string())
+                .filter(|e| !e.is_empty())
+                .collect()
+        }
+    };
+    let size = fields
+        .get("Installed-Size")
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(crate::sources::apt::format_kib)
+        .unwrap_or_default();
+    PkgDetail {
+        name: get("Package"),
+        version: get("Version"),
+        description: get("Description"),
+        url: get("Homepage"),
+        explicit: false, // set by the caller from the installed list
+        install_date: String::new(),
+        build_date: String::new(),
+        size,
+        required_by: Vec::new(),
+        optional_for: Vec::new(),
+        depends,
+    }
+}
+
 /// Count non-empty lines (used for installed counts and update counts).
 pub fn count_lines(output: &str) -> usize {
     output.lines().filter(|l| !l.trim().is_empty()).count()
@@ -448,6 +495,30 @@ Install Reason  : Explicitly installed
         let d = parse_pkg_detail(qi);
         assert_eq!(d.required_by, vec!["aaa", "bbb", "ccc", "ddd"]);
         assert_eq!(d.size, "1 MiB");
+    }
+
+    #[test]
+    fn parse_dpkg_status_extracts_fields() {
+        let s = "\
+Package: bash
+Status: install ok installed
+Installed-Size: 6469
+Maintainer: Someone <x@y.z>
+Version: 5.2.15-2+b7
+Depends: base-files (>= 2.1.12), debianutils (>= 2.15)
+Description: GNU Bourne Again SHell
+ Bash is an sh-compatible command language interpreter.
+ More long text here.
+Homepage: http://tiswww.case.edu/php/chet/bash/
+";
+        let d = parse_dpkg_status(s);
+        assert_eq!(d.name, "bash");
+        assert_eq!(d.version, "5.2.15-2+b7");
+        assert_eq!(d.description, "GNU Bourne Again SHell"); // synopsis only
+        assert_eq!(d.url, "http://tiswww.case.edu/php/chet/bash/");
+        assert_eq!(d.size, "6.32 MiB"); // 6469 KiB
+        assert_eq!(d.depends, vec!["base-files", "debianutils"]);
+        assert!(d.required_by.is_empty());
     }
 
     #[test]

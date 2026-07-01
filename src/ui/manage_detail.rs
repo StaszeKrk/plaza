@@ -35,22 +35,41 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                     Span::styled(v.to_string(), Style::default().fg(pal.fg)),
                 ])
             };
-            let join = |v: &[String]| if v.is_empty() { "(none)".to_string() } else { v.join("  ") };
             let reason = if d.explicit { "explicitly installed" } else { "dependency" };
-            let mut out = vec![
-                Line::from(Span::styled(d.name.clone(), Style::default().fg(pal.accent))),
-                Line::from(Span::styled(d.description.clone(), Style::default().fg(pal.fg))),
-                Line::from(Span::styled(d.url.clone(), Style::default().fg(pal.muted))),
-                Line::from(""),
-                field("version:", &d.version),
-                field("reason:", reason),
-                field("installed:", &d.install_date),
-                field("built:", &d.build_date),
-                field("size:", &d.size),
-                field("required by:", &join(&d.required_by)),
-                field("optional for:", &join(&d.optional_for)),
-                field("depends on:", &join(&d.depends)),
-            ];
+            // Header, then only the fields that actually have a value. Empty ones
+            // (e.g. apt has no build date or "optional for") drop their whole line
+            // instead of showing a blank label or "(none)".
+            let mut out = vec![Line::from(Span::styled(
+                d.name.clone(),
+                Style::default().fg(pal.accent),
+            ))];
+            if !d.description.is_empty() {
+                out.push(Line::from(Span::styled(d.description.clone(), Style::default().fg(pal.fg))));
+            }
+            if !d.url.is_empty() {
+                out.push(Line::from(Span::styled(d.url.clone(), Style::default().fg(pal.muted))));
+            }
+            out.push(Line::from(""));
+            out.push(field("reason:", reason));
+            for (k, v) in [
+                ("version:", &d.version),
+                ("installed:", &d.install_date),
+                ("built:", &d.build_date),
+                ("size:", &d.size),
+            ] {
+                if !v.is_empty() {
+                    out.push(field(k, v));
+                }
+            }
+            for (k, v) in [
+                ("required by:", &d.required_by),
+                ("optional for:", &d.optional_for),
+                ("depends on:", &d.depends),
+            ] {
+                if !v.is_empty() {
+                    out.push(field(k, &v.join("  ")));
+                }
+            }
             if pkg.orphan {
                 out.push(Line::from(""));
                 out.push(Line::from(Span::styled(

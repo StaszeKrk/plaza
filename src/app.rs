@@ -783,7 +783,8 @@ impl App {
     pub fn total_updates(&self) -> Option<usize> {
         let any_known = self.updates.repo.is_some()
             || self.updates.aur.is_some()
-            || self.updates.flatpak.is_some();
+            || self.updates.flatpak.is_some()
+            || self.updates.apt.is_some();
         any_known.then_some(self.updates_list.len())
     }
 

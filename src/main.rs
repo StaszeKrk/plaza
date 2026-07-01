@@ -433,11 +433,10 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
             .map(sources::updates::parse_update_count);
         let aur = aur_text.as_deref().map(sources::updates::parse_update_count);
         let flatpak_count = flatpak.then_some(flatpak_ids.len());
-        let apt_count = if sources::which("apt-get") {
-            Some(sources::updates::parse_apt_upgradable_count(&apt_upgradable_text().await))
-        } else {
-            None
-        };
+        // One `apt list --upgradable` call feeds both the count and the list.
+        let apt_upg =
+            if sources::which("apt-get") { Some(apt_upgradable_text().await) } else { None };
+        let apt_count = apt_upg.as_deref().map(sources::updates::parse_apt_upgradable_count);
         let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo {
             repo,
             aur,
@@ -459,6 +458,9 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
                 new_version: String::new(),
                 source_id: SourceId::Flatpak,
             });
+        }
+        if let Some(t) = &apt_upg {
+            list.extend(sources::updates::parse_apt_upgradable_list(t));
         }
         let _ = tx.send(AppEvent::UpdatesList(list));
     });

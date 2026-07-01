@@ -229,7 +229,7 @@ vim:
     #[test]
     fn policy_skips_uninstallable_candidate() {
         let out = "ghost:\n  Installed: (none)\n  Candidate: (none)\n  Version table:\n";
-        assert!(parse_policy(out).get("ghost").is_none());
+        assert!(!parse_policy(out).contains_key("ghost"));
     }
 
     #[test]

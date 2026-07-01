@@ -706,6 +706,7 @@ fn dispatch_manage_detail(app: &mut App, tx: &UnboundedSender<AppEvent>) {
     // the installed list, so carry it into the apt detail.
     let origin = pkg.origin.clone();
     let explicit = pkg.explicit;
+    let install_date = pkg.install_date;
     let tx = tx.clone();
     tokio::spawn(async move {
         let detail = if origin == "flatpak" {
@@ -721,6 +722,17 @@ fn dispatch_manage_detail(app: &mut App, tx: &UnboundedSender<AppEvent>) {
             let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
             let mut d = sources::installed::parse_dpkg_status(&text);
             d.explicit = explicit;
+            if let Some(ts) = install_date {
+                d.install_date = sources::installed::format_epoch_date(ts);
+            }
+            // Reverse depends for "required by" (build date and "optional for" are
+            // not available from dpkg on Debian, so those stay empty).
+            let rd = Command::new("apt-cache")
+                .args(["rdepends", "--installed", &name])
+                .output()
+                .await;
+            let rd_text = rd.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+            d.required_by = sources::installed::parse_rdepends(&rd_text);
             d
         } else {
             let out = Command::new("pacman").arg("-Qi").arg(&name).output().await;

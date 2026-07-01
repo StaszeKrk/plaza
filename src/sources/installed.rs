@@ -140,6 +140,45 @@ pub fn parse_dpkg_status(text: &str) -> PkgDetail {
     }
 }
 
+/// Format a unix timestamp (secs) as "YYYY-MM-DD HH:MM" in UTC. Plaza has no date
+/// library; this uses the standard days-to-civil algorithm (Howard Hinnant).
+pub fn format_epoch_date(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    let sod = secs.rem_euclid(86_400);
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", y, m, d, sod / 3600, (sod % 3600) / 60)
+}
+
+/// Parse `apt-cache rdepends --installed <pkg>` into the reverse-dependency names
+/// (packages that depend on it), for the Manage detail "required by" field.
+/// Skips the echoed package name (unindented) and the "Reverse Depends:" header;
+/// strips `|` alternation markers; dedups.
+pub fn parse_rdepends(output: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in output.lines() {
+        if !line.starts_with(char::is_whitespace) {
+            continue; // the echoed query package name
+        }
+        let t = line.trim().trim_start_matches('|').trim();
+        if t.is_empty() || t.contains(':') {
+            continue;
+        }
+        if !out.iter().any(|n| n == t) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
 /// Count non-empty lines (used for installed counts and update counts).
 pub fn count_lines(output: &str) -> usize {
     output.lines().filter(|l| !l.trim().is_empty()).count()
@@ -495,6 +534,19 @@ Install Reason  : Explicitly installed
         let d = parse_pkg_detail(qi);
         assert_eq!(d.required_by, vec!["aaa", "bbb", "ccc", "ddd"]);
         assert_eq!(d.size, "1 MiB");
+    }
+
+    #[test]
+    fn format_epoch_date_utc() {
+        assert_eq!(format_epoch_date(0), "1970-01-01 00:00");
+        assert_eq!(format_epoch_date(1_700_000_000), "2023-11-14 22:13");
+    }
+
+    #[test]
+    fn parse_rdepends_names() {
+        let out = "bash\nReverse Depends:\n  pkg1\n  pkg2\n |pkg3\n  pkg1\n";
+        assert_eq!(parse_rdepends(out), vec!["pkg1", "pkg2", "pkg3"]); // deduped, | stripped
+        assert!(parse_rdepends("bash\nReverse Depends:\n").is_empty());
     }
 
     #[test]

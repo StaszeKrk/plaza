@@ -89,6 +89,8 @@ async fn run_tui() -> anyhow::Result<()> {
     // `checkupdates` (pacman-contrib) syncs a private db so update counts stay
     // live without root; without it we fall back to a stale `pacman -Qu`.
     app.has_checkupdates = sources::which("checkupdates");
+    // Probed once at startup; drives hiding of Arch-only UI on non-Arch systems.
+    app.pacman_present = sources::which("pacman");
     // Detect AUR helpers (yay/paru) and resolve the active one from settings.
     app.helpers_available = sources::detect_aur_helpers();
     app.recompute_aur_helper();
@@ -1270,7 +1272,12 @@ async fn run_search_cli(term: &str) -> anyhow::Result<()> {
         }
     }
     let idx = installed_index().await;
-    let mut rows = merge(all_hits, &idx, settings.stack_variants, settings.group_flatpak);
+    let mut rows = merge(
+        all_hits,
+        &idx,
+        settings.stack_variants && sources::which("pacman"),
+        settings.group_flatpak,
+    );
     relevance_sort(term, &mut rows);
     for row in &rows {
         let badges: Vec<&str> = row.providers.iter().map(|p| p.badge()).collect();

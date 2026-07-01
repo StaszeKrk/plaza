@@ -322,6 +322,9 @@ pub struct App {
     /// Whether `checkupdates` is available (else update counts are stale until a
     /// real `pacman -Sy`).
     pub has_checkupdates: bool,
+    /// Whether pacman is on PATH (probed once at startup). Drives hiding of
+    /// Arch-only UI; independent of `disabled_sources`.
+    pub pacman_present: bool,
     pub confirm: Option<ActionSpec>,
     pub confirm_note: Option<String>,
     /// Per-package action chooser, opened by Enter on an upgradable Manage row so
@@ -434,6 +437,7 @@ impl App {
             upgrade_scope_selected: 0,
             interacting: true,
             has_checkupdates: false,
+            pacman_present: false,
             confirm: None,
             confirm_note: None,
             manage_menu: None,
@@ -863,7 +867,7 @@ impl App {
         self.rows = merge(
             self.hits_buffer.clone(),
             &self.installed,
-            self.settings.stack_variants,
+            self.effective_stack_variants(),
             self.settings.group_flatpak,
         );
         relevance_sort(&self.query, &mut self.rows);
@@ -1326,6 +1330,12 @@ impl App {
         self.source_status.iter().map(|(id, _)| *id).collect()
     }
 
+    /// Variant stacking (`-bin`/`-git`) only makes sense on Arch/AUR; force it off
+    /// on non-Arch so Debian names like `python3-git` are never mis-merged.
+    pub fn effective_stack_variants(&self) -> bool {
+        self.settings.stack_variants && self.pacman_present
+    }
+
     /// Build the upgrade spec for the selected scope chip. Chip 0 ("All") chains
     /// every present source's upgrade into one task; a source chip upgrades just
     /// that source.
@@ -1603,6 +1613,16 @@ mod tests {
         app.apply_search_results(id, SourceId::Aur, vec![hit("firefox-bin", SourceId::Aur)]);
         assert_eq!(app.rows.len(), 2);
         assert_eq!(app.rows[0].name, "firefox");
+    }
+
+    #[test]
+    fn effective_stack_variants_requires_pacman() {
+        let settings = Settings { stack_variants: true, ..Settings::default() };
+        let mut app = App::with_settings(vec![SourceId::Apt], settings);
+        app.pacman_present = true;
+        assert!(app.effective_stack_variants());
+        app.pacman_present = false;
+        assert!(!app.effective_stack_variants()); // forced off on non-Arch
     }
 
     #[test]

@@ -37,6 +37,8 @@ pub enum FilterId {
     Aur,
     /// Flatpak.
     Flatpak,
+    /// apt (Debian).
+    Apt,
     /// A Manage installation-reason choice (radio: All/Explicit/Orphans). Shown in
     /// the filter box only in the Manage view.
     Reason(crate::model::ReasonFilter),
@@ -1103,6 +1105,13 @@ impl App {
                 id: FilterId::Flatpak,
             });
         }
+        if self.present_sources().contains(&SourceId::Apt) {
+            rows.push(FilterRow {
+                label: "apt".into(),
+                checked: self.repo_shown("apt"),
+                id: FilterId::Apt,
+            });
+        }
         // Reason rows (radio) live in the Manage view only.
         if self.active_view == ActiveView::Manage {
             use crate::model::ReasonFilter::*;
@@ -1163,6 +1172,7 @@ impl App {
             FilterId::Repo(r) => self.toggle_repo_off(&r),
             FilterId::Aur => self.toggle_repo_off("aur"),
             FilterId::Flatpak => self.toggle_repo_off("flatpak"),
+            FilterId::Apt => self.toggle_repo_off("apt"),
             FilterId::Reason(r) => self.manage_reason = r, // radio: select
             FilterId::Sort(k) => self.select_sort(k),      // radio, or flip dir
             FilterId::SaveDefault => {
@@ -1858,6 +1868,16 @@ mod tests {
         assert_eq!(spec.source_id, SourceId::Flatpak);
         assert_eq!(spec.command.program, "flatpak");
         assert_eq!(spec.command.args, vec!["uninstall", "--user", "org.mozilla.firefox"]);
+    }
+
+    #[test]
+    fn apt_filter_row_present_and_toggles() {
+        let mut app = App::with_settings(vec![SourceId::Apt], Settings::default());
+        let rows = app.filter_checkboxes();
+        assert!(rows.iter().any(|r| matches!(r.id, FilterId::Apt)));
+        assert!(app.repo_shown("apt")); // shown by default
+        app.toggle_repo_off("apt");
+        assert!(!app.repo_shown("apt")); // toggled off
     }
 
     #[test]

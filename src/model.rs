@@ -5,6 +5,7 @@ pub enum SourceId {
     Pacman,
     Aur,
     Flatpak,
+    Apt,
 }
 
 impl SourceId {
@@ -13,6 +14,7 @@ impl SourceId {
             SourceId::Pacman => "repo",
             SourceId::Aur => "aur",
             SourceId::Flatpak => "flatpak",
+            SourceId::Apt => "apt",
         }
     }
 }
@@ -80,6 +82,7 @@ impl Provider {
             SourceId::Pacman => self.meta.repo.as_deref().unwrap_or("repo"),
             SourceId::Aur => "aur",
             SourceId::Flatpak => "flatpak",
+            SourceId::Apt => self.meta.repo.as_deref().unwrap_or("apt"),
         }
     }
 
@@ -95,6 +98,7 @@ impl Provider {
             },
             SourceId::Aur => format!("aur:{}", self.target),
             SourceId::Flatpak => format!("flatpak:{}", self.target),
+            SourceId::Apt => format!("apt:{}", self.target),
         }
     }
 
@@ -126,6 +130,12 @@ impl Provider {
                     self.meta.repo.clone().unwrap_or_else(|| "flathub".into()),
                     self.target.clone(),
                 ],
+            },
+            // apt installs unqualified (candidate suite only), interactive (no
+            // -y) so the PTY surfaces apt's [Y/n] prompt.
+            SourceId::Apt => CommandLine {
+                program: "sudo".into(),
+                args: vec!["apt-get".into(), "install".into(), self.target.clone()],
             },
         }
     }
@@ -486,6 +496,10 @@ pub fn upgrade_one_command(name: &str, source_id: SourceId, aur_bin: &str) -> Co
             program: "flatpak".into(),
             args: vec!["update".into(), "--user".into(), "-y".into(), name.into()],
         },
+        SourceId::Apt => CommandLine {
+            program: "sudo".into(),
+            args: vec!["apt-get".into(), "install".into(), "--only-upgrade".into(), name.into()],
+        },
     }
 }
 
@@ -497,6 +511,26 @@ pub fn remove_command_flatpak(app_id: &str) -> CommandLine {
         program: "flatpak".into(),
         args: vec!["uninstall".into(), "--user".into(), app_id.into()],
     }
+}
+
+/// Remove an apt package at the given depth (no `-y`, interactive). apt has no
+/// `-R` family, so `RemoveDepth` maps to apt verbs: `Package` -> remove,
+/// `WithDeps` -> remove --auto-remove, `Purge` -> purge --auto-remove.
+pub fn remove_command_apt(name: &str, depth: RemoveDepth) -> CommandLine {
+    let mut args = vec!["apt-get".to_string()];
+    match depth {
+        RemoveDepth::Package => args.push("remove".into()),
+        RemoveDepth::WithDeps => {
+            args.push("remove".into());
+            args.push("--auto-remove".into());
+        }
+        RemoveDepth::Purge => {
+            args.push("purge".into());
+            args.push("--auto-remove".into());
+        }
+    }
+    args.push(name.to_string());
+    CommandLine { program: "sudo".into(), args }
 }
 
 /// True when a PTY line looks like a prompt that has stopped to wait for input
@@ -530,6 +564,12 @@ pub fn source_upgrade_command(source_id: SourceId, aur_bin: &str) -> CommandLine
         SourceId::Flatpak => CommandLine {
             program: "flatpak".into(),
             args: vec!["update".into(), "--user".into(), "-y".into()],
+        },
+        // update then upgrade as one shell command; interactive (no -y) so the
+        // upgrade half surfaces apt's proceed prompt.
+        SourceId::Apt => CommandLine {
+            program: "sh".into(),
+            args: vec!["-c".into(), "sudo apt-get update && sudo apt-get upgrade".into()],
         },
     }
 }
@@ -580,11 +620,12 @@ pub struct InstalledStats {
     pub repo: usize,
     pub foreign: usize,
     pub flatpak: usize,
+    pub apt: usize,
 }
 
 impl InstalledStats {
     pub fn total(&self) -> usize {
-        self.repo + self.foreign + self.flatpak
+        self.repo + self.foreign + self.flatpak + self.apt
     }
 }
 
@@ -593,6 +634,7 @@ pub struct UpdatesInfo {
     pub repo: Option<usize>,
     pub aur: Option<usize>,
     pub flatpak: Option<usize>,
+    pub apt: Option<usize>,
 }
 
 /// The bare package name from a dependency string, dropping version
@@ -640,6 +682,55 @@ mod tests {
         assert_eq!(SourceId::Pacman.badge(), "repo");
         assert_eq!(SourceId::Aur.badge(), "aur");
         assert_eq!(SourceId::Flatpak.badge(), "flatpak");
+        assert_eq!(SourceId::Apt.badge(), "apt");
+    }
+
+    #[test]
+    fn apt_provider_commands() {
+        let p = Provider {
+            source_id: SourceId::Apt,
+            version: "1".into(),
+            installed: false,
+            installed_version: None,
+            target: "firefox-esr".into(),
+            meta: SourceMeta { repo: Some("bookworm/main".into()), ..Default::default() },
+        };
+        let c = p.install_command("firefox-esr", "");
+        assert_eq!(c.program, "sudo");
+        assert_eq!(c.args, vec!["apt-get", "install", "firefox-esr"]);
+        assert_eq!(p.detail_key("firefox-esr"), "apt:firefox-esr");
+        // the suite shows on the badge, like a pacman repo
+        assert_eq!(p.badge(), "bookworm/main");
+    }
+
+    #[test]
+    fn apt_upgrade_and_source_upgrade() {
+        let one = upgrade_one_command("vim", SourceId::Apt, "");
+        assert_eq!(one.program, "sudo");
+        assert_eq!(one.args, vec!["apt-get", "install", "--only-upgrade", "vim"]);
+        let all = source_upgrade_command(SourceId::Apt, "");
+        assert_eq!(all.program, "sh");
+        assert_eq!(
+            all.args,
+            vec!["-c".to_string(), "sudo apt-get update && sudo apt-get upgrade".to_string()]
+        );
+    }
+
+    #[test]
+    fn apt_remove_maps_depth() {
+        assert_eq!(
+            remove_command_apt("vim", RemoveDepth::Package).args,
+            vec!["apt-get", "remove", "vim"]
+        );
+        assert_eq!(
+            remove_command_apt("vim", RemoveDepth::WithDeps).args,
+            vec!["apt-get", "remove", "--auto-remove", "vim"]
+        );
+        assert_eq!(
+            remove_command_apt("vim", RemoveDepth::Purge).args,
+            vec!["apt-get", "purge", "--auto-remove", "vim"]
+        );
+        assert_eq!(remove_command_apt("vim", RemoveDepth::Package).program, "sudo");
     }
 
     #[test]
@@ -733,8 +824,8 @@ mod tests {
 
     #[test]
     fn installed_stats_total() {
-        let s = InstalledStats { repo: 1208, foreign: 77, flatpak: 12 };
-        assert_eq!(s.total(), 1297);
+        let s = InstalledStats { repo: 1208, foreign: 77, flatpak: 12, apt: 3 };
+        assert_eq!(s.total(), 1300);
     }
 
     #[test]

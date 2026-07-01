@@ -23,6 +23,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             SourceId::Pacman => pal.badge_repo,
             SourceId::Aur => pal.badge_aur,
             SourceId::Flatpak => pal.badge_flatpak,
+            SourceId::Apt => pal.badge_repo,
         };
         spans.push(Span::styled(format!("{} ", id.badge()), Style::default().fg(badge_col)));
         spans.push(Span::styled(format!("{txt}   "), Style::default().fg(col)));

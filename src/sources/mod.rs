@@ -1,3 +1,4 @@
+pub mod apt;
 pub mod aur;
 pub mod flatpak;
 pub mod installed;
@@ -64,6 +65,9 @@ pub fn detect_sources(disabled: &[SourceId]) -> Vec<Box<dyn Source>> {
     }
     if has_usable_flatpak() && !disabled.contains(&SourceId::Flatpak) {
         sources.push(Box::new(flatpak::FlatpakSource::new()));
+    }
+    if which("apt-get") && !disabled.contains(&SourceId::Apt) {
+        sources.push(Box::new(apt::AptSource::new()));
     }
     sources
 }

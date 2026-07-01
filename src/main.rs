@@ -337,23 +337,31 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
         // One `flatpak list` call feeds both the count and the index folding.
         let fp_text = if flatpak { flatpak_list_text().await } else { String::new() };
         let fp_count = sources::installed::count_lines(&fp_text);
+        // apt: dpkg-query lists installed packages; empty on a non-apt system.
+        let apt_text = if sources::which("apt-get") { apt_installed_text().await } else { String::new() };
+        let apt_count = sources::installed::count_lines(&apt_text);
         let _ = tx_inst.send(AppEvent::Stats(crate::model::InstalledStats {
             repo,
             foreign,
             flatpak: fp_count,
+            apt: apt_count,
         }));
 
-        if let Ok(out) = Command::new("pacman").arg("-Q").output().await {
-            let mut idx = sources::installed::InstalledIndex::from_query_output(
+        // Build the installed index from whichever native manager is present:
+        // `pacman -Q` on Arch, else dpkg-query on Debian. Both parse as
+        // `name version` per line, so search rows show installed state either way.
+        let mut idx = match Command::new("pacman").arg("-Q").output().await {
+            Ok(out) => sources::installed::InstalledIndex::from_query_output(
                 &String::from_utf8_lossy(&out.stdout),
-            );
-            // Fold installed Flatpak app IDs into the index so search results show
-            // installed state for Flatpak too.
-            for pkg in sources::flatpak::parse_installed_pkgs(&fp_text) {
-                idx.insert(pkg.name, pkg.version);
-            }
-            let _ = tx_inst.send(AppEvent::Installed(idx));
+            ),
+            Err(_) => sources::installed::InstalledIndex::from_query_output(&apt_text),
+        };
+        // Fold installed Flatpak app IDs into the index so search results show
+        // installed state for Flatpak too.
+        for pkg in sources::flatpak::parse_installed_pkgs(&fp_text) {
+            idx.insert(pkg.name, pkg.version);
         }
+        let _ = tx_inst.send(AppEvent::Installed(idx));
     });
 
     // full installed list (native + foreign) with origin, for the Manage view
@@ -425,10 +433,16 @@ fn spawn_stats_tasks(tx: UnboundedSender<AppEvent>, aur_helper: Option<String>, 
             .map(sources::updates::parse_update_count);
         let aur = aur_text.as_deref().map(sources::updates::parse_update_count);
         let flatpak_count = flatpak.then_some(flatpak_ids.len());
+        let apt_count = if sources::which("apt-get") {
+            Some(sources::updates::parse_apt_upgradable_count(&apt_upgradable_text().await))
+        } else {
+            None
+        };
         let _ = tx.send(AppEvent::Updates(crate::model::UpdatesInfo {
             repo,
             aur,
             flatpak: flatpak_count,
+            apt: apt_count,
         }));
 
         let mut list = Vec::new();
@@ -478,6 +492,33 @@ async fn run_count(args: &[&str]) -> usize {
     match Command::new("pacman").args(args).output().await {
         Ok(out) => sources::installed::count_lines(&String::from_utf8_lossy(&out.stdout)),
         Err(_) => 0,
+    }
+}
+
+/// Installed apt packages as `name<TAB>version` lines (via dpkg-query), or empty
+/// on failure / a non-apt system. Feeds both the installed count and the index.
+async fn apt_installed_text() -> String {
+    match Command::new("dpkg-query")
+        .args(["-W", "-f=${Package}\t${Version}\n"])
+        .output()
+        .await
+    {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(_) => String::new(),
+    }
+}
+
+/// `apt list --upgradable` stdout (the `Listing...` notice goes to stderr), or
+/// empty on failure. Parsed by `parse_apt_upgradable_count`.
+async fn apt_upgradable_text() -> String {
+    match Command::new("apt")
+        .env("LC_ALL", "C")
+        .args(["list", "--upgradable"])
+        .output()
+        .await
+    {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(_) => String::new(),
     }
 }
 
@@ -655,6 +696,12 @@ async fn fetch_detail(
                 .await
                 .ok()?;
             Some(sources::flatpak::parse_remote_info(&String::from_utf8_lossy(&out.stdout)))
+        }
+        SourceId::Apt => {
+            // `name` is the package name. `apt-cache show` reads the local cache;
+            // parse the first (Candidate) paragraph.
+            let out = Command::new("apt-cache").arg("show").arg(name).output().await.ok()?;
+            Some(sources::apt::parse_show_output(&String::from_utf8_lossy(&out.stdout)))
         }
     }
 }

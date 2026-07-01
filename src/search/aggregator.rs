@@ -142,6 +142,7 @@ fn source_order(id: SourceId) -> u8 {
         SourceId::Pacman => 0,
         SourceId::Aur => 1,
         SourceId::Flatpak => 2,
+        SourceId::Apt => 3,
     }
 }
 

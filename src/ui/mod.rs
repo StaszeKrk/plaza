@@ -154,6 +154,9 @@ pub fn source_icon(app: &App, source: SourceId) -> &str {
         SourceId::Pacman => &app.skin.icons.repo,
         SourceId::Aur => &app.skin.icons.aur,
         SourceId::Flatpak => &app.skin.icons.flatpak,
+        // ponytail: reuse the repo glyph for apt; a dedicated apt icon is a
+        // theming follow-up, not needed for v1.
+        SourceId::Apt => &app.skin.icons.repo,
     }
 }
 
@@ -165,6 +168,9 @@ pub fn badge_span(app: &App, label: &str, source: SourceId, count: usize) -> Spa
         SourceId::Flatpak => app.palette.badge_flatpak,
         SourceId::Pacman if app.settings.collapse_repos => app.palette.badge_official,
         SourceId::Pacman => app.palette.badge_repo,
+        // ponytail: apt reuses the repo badge color; it is a repo-based system
+        // manager like pacman.
+        SourceId::Apt => app.palette.badge_repo,
     };
     let icon = source_icon(app, source);
     let icon = if icon.is_empty() { String::new() } else { format!("{icon} ") };

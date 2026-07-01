@@ -50,6 +50,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             crate::model::SourceId::Pacman => ("repo", app.updates.repo, app.stats.repo),
             crate::model::SourceId::Aur => ("aur", app.updates.aur, app.stats.foreign),
             crate::model::SourceId::Flatpak => ("flatpak", app.updates.flatpak, app.stats.flatpak),
+            crate::model::SourceId::Apt => ("apt", app.updates.apt, app.stats.apt),
         };
         stats.push(yx_row(label, y, x, app.sidebar_selected == i));
     }

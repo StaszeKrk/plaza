@@ -7,6 +7,12 @@ pub fn parse_update_count(output: &str) -> usize {
     count_lines(output)
 }
 
+/// Count `apt list --upgradable` package lines, skipping the `Listing...`
+/// header. Package lines carry the `[upgradable from: ...]` marker.
+pub fn parse_apt_upgradable_count(output: &str) -> usize {
+    output.lines().filter(|l| l.contains("[upgradable")).count()
+}
+
 /// One upgradable package with its current and target version, tagged with the
 /// source it came from (repos vs AUR).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +61,14 @@ mod tests {
         let out = "firefox 140.0-1 -> 141.0-1\nlinux 6.9 -> 6.10\n";
         assert_eq!(parse_update_count(out), 2);
         assert_eq!(parse_update_count(""), 0);
+    }
+
+    #[test]
+    fn counts_apt_upgradable() {
+        let out = "Listing...\nvim/bookworm 2:9.0-2 amd64 [upgradable from: 2:9.0-1]\ncurl/bookworm 7.88-2 amd64 [upgradable from: 7.88-1]\n";
+        assert_eq!(parse_apt_upgradable_count(out), 2);
+        assert_eq!(parse_apt_upgradable_count("Listing...\n"), 0);
+        assert_eq!(parse_apt_upgradable_count(""), 0);
     }
 
     #[test]

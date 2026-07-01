@@ -222,12 +222,25 @@ impl RemoveDepth {
         }
     }
 
-    /// Short label for the options overlay.
-    pub fn label(self) -> &'static str {
+    /// Source-agnostic description for the options overlay (no command flag).
+    pub fn label_text(self) -> &'static str {
         match self {
-            RemoveDepth::Package => "package only (-R)",
-            RemoveDepth::WithDeps => "+ unused deps (-Rs)",
-            RemoveDepth::Purge => "+ deps + config (-Rns)",
+            RemoveDepth::Package => "package only",
+            RemoveDepth::WithDeps => "+ unused deps",
+            RemoveDepth::Purge => "+ deps + config",
+        }
+    }
+
+    /// The parenthetical command hint shown next to the depth label: pacman flags
+    /// on Arch, apt verbs otherwise.
+    pub fn flag_hint(self, pacman_present: bool) -> &'static str {
+        match (self, pacman_present) {
+            (RemoveDepth::Package, true) => "-R",
+            (RemoveDepth::WithDeps, true) => "-Rs",
+            (RemoveDepth::Purge, true) => "-Rns",
+            (RemoveDepth::Package, false) => "remove",
+            (RemoveDepth::WithDeps, false) => "remove --auto-remove",
+            (RemoveDepth::Purge, false) => "purge",
         }
     }
 
@@ -895,6 +908,15 @@ mod tests {
             remove_command("firefox", RemoveDepth::Purge).args,
             vec!["pacman", "-Rns", "firefox"]
         );
+    }
+
+    #[test]
+    fn remove_depth_flag_hint_per_manager() {
+        assert_eq!(RemoveDepth::WithDeps.flag_hint(true), "-Rs");
+        assert_eq!(RemoveDepth::WithDeps.flag_hint(false), "remove --auto-remove");
+        assert_eq!(RemoveDepth::Package.flag_hint(false), "remove");
+        assert_eq!(RemoveDepth::Purge.flag_hint(false), "purge");
+        assert_eq!(RemoveDepth::Package.label_text(), "package only");
     }
 
     #[test]

@@ -62,7 +62,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     ));
     // Only when live update counts are unavailable, hint at the fix. The "—"
     // values already signal the missing state, so this stays to one muted line.
-    if !app.has_checkupdates {
+    if !app.has_checkupdates && app.pacman_present {
         stats.push(Line::from(Span::styled(
             " pacman-contrib".to_string(),
             Style::default().fg(pal.muted),

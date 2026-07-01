@@ -561,34 +561,46 @@ impl App {
     // --- Options overlay ---
 
     /// The options menu grouped into categories. Drives both rendering and
-    /// navigation; headers are not selectable.
-    pub fn option_layout() -> &'static [(&'static str, &'static [OptionId])] {
+    /// navigation; headers are not selectable. Arch-only options (CollapseRepos,
+    /// AurHelper, StackVariants) are dropped on non-Arch systems; empty groups
+    /// are removed so navigation stays correct with fewer rows.
+    pub fn option_layout(&self) -> Vec<(&'static str, Vec<OptionId>)> {
         use OptionId::*;
-        &[
+        let arch_only = |id: &OptionId| matches!(id, CollapseRepos | AurHelper | StackVariants);
+        let groups: &[(&'static str, &'static [OptionId])] = &[
             ("Appearance", &[Palette, Skin, Highlight]),
             ("Search", &[SearchDelay, CollapseRepos, StackVariants, GroupFlatpak, VariantBadge]),
             ("Manage", &[RemoveDepth, AurHelper, FlatpakAppId, FloatUpdates]),
             ("Filters", &[HideIdleFilter]),
             ("General", &[ShowHotkeys]),
-        ]
+        ];
+        groups
+            .iter()
+            .map(|(h, ids)| {
+                let kept: Vec<OptionId> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| self.pacman_present || !arch_only(id))
+                    .collect();
+                (*h, kept)
+            })
+            .filter(|(_, ids)| !ids.is_empty())
+            .collect()
     }
 
     /// The selectable option ids in layout order (the cursor indexes this).
-    pub fn flat_options() -> Vec<OptionId> {
-        Self::option_layout()
-            .iter()
-            .flat_map(|(_, ids)| ids.iter().copied())
-            .collect()
+    pub fn flat_options(&self) -> Vec<OptionId> {
+        self.option_layout().into_iter().flat_map(|(_, ids)| ids).collect()
     }
 
     /// The option under the cursor.
     pub fn selected_option(&self) -> OptionId {
-        let flat = Self::flat_options();
+        let flat = self.flat_options();
         flat[self.options_selected.min(flat.len() - 1)]
     }
 
     pub fn move_options(&mut self, delta: i32) {
-        let max = Self::flat_options().len() as i32 - 1;
+        let max = self.flat_options().len() as i32 - 1;
         let next = (self.options_selected as i32 + delta).clamp(0, max);
         self.options_selected = next as usize;
     }
@@ -1482,7 +1494,7 @@ mod tests {
         assert!(!app.filter_checkboxes().iter().any(|r| r.label.contains("float")));
         let before = app.manage_float_updates;
         app.options_selected =
-            App::flat_options().iter().position(|o| *o == OptionId::FloatUpdates).unwrap();
+            app.flat_options().iter().position(|o| *o == OptionId::FloatUpdates).unwrap();
         app.toggle_option();
         assert_eq!(app.manage_float_updates, !before);
         assert_eq!(app.settings.default_manage_float_updates, !before);
@@ -1655,7 +1667,9 @@ mod tests {
 
     #[test]
     fn flat_options_has_every_id_once() {
-        let flat = App::flat_options();
+        let mut app = App::with_settings(vec![SourceId::Pacman], Settings::default());
+        app.pacman_present = true;
+        let flat = app.flat_options();
         let mut seen = flat.clone();
         seen.sort_by_key(|o| *o as usize);
         seen.dedup_by_key(|o| *o as usize);
@@ -1664,12 +1678,30 @@ mod tests {
     }
 
     #[test]
+    fn arch_only_options_hidden_off_arch() {
+        let mut app = App::with_settings(vec![SourceId::Apt], Settings::default());
+        app.pacman_present = false;
+        let flat = app.flat_options();
+        assert!(!flat.contains(&OptionId::AurHelper));
+        assert!(!flat.contains(&OptionId::CollapseRepos));
+        assert!(!flat.contains(&OptionId::StackVariants));
+        // non-Arch options remain
+        assert!(flat.contains(&OptionId::RemoveDepth));
+        assert!(flat.contains(&OptionId::GroupFlatpak));
+        // and they come back on Arch
+        app.pacman_present = true;
+        assert!(app.flat_options().contains(&OptionId::AurHelper));
+        assert!(app.flat_options().contains(&OptionId::CollapseRepos));
+        assert!(app.flat_options().contains(&OptionId::StackVariants));
+    }
+
+    #[test]
     fn move_options_clamps_to_flat_len() {
         let mut app = App::with_settings(vec![], Settings::default());
         app.move_options(-5);
         assert_eq!(app.options_selected, 0);
         app.move_options(1000);
-        assert_eq!(app.options_selected, App::flat_options().len() - 1);
+        assert_eq!(app.options_selected, app.flat_options().len() - 1);
     }
 
     #[test]
@@ -1679,7 +1711,8 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("plaza-opt-test-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &tmp);
         let mut app = App::with_settings(vec![], Settings::default());
-        let idx = App::flat_options()
+        let idx = app
+            .flat_options()
             .iter()
             .position(|o| *o == OptionId::ShowHotkeys)
             .unwrap();

@@ -332,7 +332,11 @@ fn option_row_text(app: &App, id: OptionId) -> String {
             format!("    Highlight substrings: {}", app.settings.highlight.label())
         }
         OptionId::SearchDelay => format!("    Search delay: {}ms", app.settings.debounce_ms),
-        OptionId::RemoveDepth => format!("    Remove depth: {}", app.settings.remove_depth.label()),
+        OptionId::RemoveDepth => format!(
+            "    Remove depth: {} ({})",
+            app.settings.remove_depth.label_text(),
+            app.settings.remove_depth.flag_hint(app.pacman_present)
+        ),
         OptionId::AurHelper => format!("    AUR helper: {}", aur_helper_label(app)),
         OptionId::FlatpakAppId => {
             format!("{} Show Flatpak app IDs in Manage", check(app.settings.flatpak_app_id))
@@ -351,12 +355,12 @@ fn draw_options(frame: &mut Frame, app: &App, area: Rect) {
     let sel = app.options_selected;
     let mut lines: Vec<Line> = Vec::new();
     let mut i = 0usize; // running selectable-row index, matching flat_options order
-    for (cat, ids) in App::option_layout() {
+    for (cat, ids) in app.option_layout() {
         lines.push(Line::from(Span::styled(
             format!(" {cat}"),
             Style::default().fg(app.palette.muted),
         )));
-        for id in *ids {
+        for id in &ids {
             let selected = i == sel;
             let marker = if selected { cursor_symbol(app) } else { "  ".to_string() };
             let style = if selected {

@@ -12,10 +12,10 @@ background pane backed by a real terminal, so you can keep working while one run
 
 Plaza supports Arch (pacman and the AUR) and Debian (apt), and also searches
 Flatpak (Flathub) when it is set up. The source backends sit behind a trait, so
-dnf, zypper, and snap can be added later. Search, detail, and install work for
-every enabled source; the Manage view (installed list, removal, per-source
-upgrade) currently covers pacman, the AUR, and Flatpak, with apt Manage support
-in progress.
+dnf, zypper, and snap can be added later. Search, detail, install, and the Manage
+view (installed list, removal, and upgrade) all work for every enabled source:
+pacman, the AUR, apt, and Flatpak. Plaza shows only what fits the system it runs
+on, so Arch-specific controls do not appear on Debian and the reverse.
 
 ## What it does
 

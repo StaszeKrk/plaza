@@ -1,7 +1,8 @@
 use crate::action::runner::ActiveTask;
 use crate::config::Settings;
 use crate::model::{
-    chain_commands, remove_command, remove_command_flatpak, source_upgrade_command,
+    chain_commands, remove_command, remove_command_apt, remove_command_flatpak,
+    source_upgrade_command,
     upgrade_one_command, Action, ActionSpec, InstalledStats, PackageDetail, PackageHit, PackageRow,
     Provider, SortDir, SortKey, SourceId, UpdatesInfo,
 };
@@ -1262,6 +1263,15 @@ impl App {
                 command: remove_command_flatpak(&pkg.name),
             });
         }
+        // apt removal goes through `apt-get`, mapping the depth to apt verbs.
+        if pkg.origin == "apt" {
+            return Some(ActionSpec {
+                targets: vec![pkg.name.clone()],
+                source_id: SourceId::Apt,
+                action: Action::Remove,
+                command: remove_command_apt(&pkg.name, self.settings.remove_depth),
+            });
+        }
         Some(ActionSpec {
             targets: vec![pkg.name.clone()],
             source_id: SourceId::Pacman,
@@ -1848,6 +1858,22 @@ mod tests {
         assert_eq!(spec.source_id, SourceId::Flatpak);
         assert_eq!(spec.command.program, "flatpak");
         assert_eq!(spec.command.args, vec!["uninstall", "--user", "org.mozilla.firefox"]);
+    }
+
+    #[test]
+    fn remove_spec_routes_apt_to_apt_get() {
+        let mut app = App::with_settings(vec![SourceId::Apt], Settings::default());
+        app.installed_list = vec![InstalledPkg {
+            name: "vim".into(),
+            version: "9.0".into(),
+            origin: "apt".into(),
+            ..Default::default()
+        }];
+        let spec = app.remove_spec().expect("spec");
+        assert_eq!(spec.source_id, SourceId::Apt);
+        assert_eq!(spec.command.program, "sudo");
+        assert_eq!(spec.command.args[0], "apt-get");
+        assert_eq!(spec.command.args.last().unwrap(), "vim");
     }
 
     #[test]

@@ -4,6 +4,21 @@ version = "0.7.0"
 edition = "2021"
 description = "Cross-distro TUI package manager browser"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/StaszeKrk/plaza"
+
+[package.metadata.deb]
+maintainer = "staszek <staszekborkowski7@gmail.com>"
+copyright = "2026 staszek"
+section = "utils"
+priority = "optional"
+extended-description = """\
+Plaza searches apt and Flathub at the same time, merges results by package
+name, shows per-source detail, and installs from a non-blocking background
+terminal pane. On Arch it also covers pacman repos and the AUR."""
+assets = [
+    ["target/release/plaza", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/plaza/README.md", "644"],
+]
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync"] }

@@ -105,6 +105,9 @@ General:
 
 ## Requirements
 
+On Debian and Ubuntu, apt and dpkg are all Plaza needs; they are part of the
+base system. The rest of this list applies to Arch:
+
 - pacman, for official-repo search, install, and removal
 - an AUR helper (yay or paru), for AUR installs and upgrades. AUR search itself
   needs no helper; with neither installed you can still browse AUR results.
@@ -115,7 +118,15 @@ General:
 
 ## Install
 
-As a pacman package (tracked by pacman, removable with `pacman -R plaza`):
+On Debian or Ubuntu, download the `.deb` from the
+[latest release](https://github.com/StaszeKrk/plaza/releases/latest) and:
+
+```sh
+sudo apt install ./plaza_*.deb
+```
+
+On Arch, as a pacman package (tracked by pacman, removable with
+`pacman -R plaza`):
 
 ```sh
 makepkg -si

@@ -120,7 +120,8 @@ impl Default for Icons {
             package: "\u{f487}".into(),
             repo: "\u{f233}".into(),
             aur: "\u{f303}".into(),
-            flatpak: "\u{f3d0}".into(),
+            // Flathub logo from the font-logos block (U+F300 + offset 36).
+            flatpak: "\u{f324}".into(),
             installed: "\u{f00c}".into(),
             update: "\u{f062}".into(),
             running: "\u{f110}".into(),

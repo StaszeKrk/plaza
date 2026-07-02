@@ -37,6 +37,10 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("plaza {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if let Some(pos) = args.iter().position(|a| a == "--search") {
         let term = args.get(pos + 1).cloned().unwrap_or_default();
         if term.is_empty() {

@@ -829,6 +829,7 @@ dependencies = [
  "async-trait",
  "crossterm",
  "futures",
+ "libc",
  "percent-encoding",
  "portable-pty",
  "ratatui",

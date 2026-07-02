@@ -325,7 +325,9 @@ fn start_next(app: &mut App, tx: &UnboundedSender<AppEvent>, surface: bool) {
             }
         }
         Err(e) => {
-            eprintln!("plaza: failed to start action: {e}");
+            // Raw-mode TUI: stderr is invisible; put the error where the
+            // user can see it.
+            app.status_msg = Some(format!("failed to start action: {e}"));
         }
     }
 }

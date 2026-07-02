@@ -1,8 +1,9 @@
 use crate::event::AppEvent;
 use crate::model::ActionSpec;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, MasterPty, PtySize};
 use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub enum TaskState {
@@ -61,16 +62,38 @@ pub fn start_action(
         pixel_height: 0,
     })?;
 
-    let mut cmd = CommandBuilder::new(spec.command.program.as_str());
-    for arg in &spec.command.args {
-        cmd.arg(arg.as_str());
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
-    }
+    // Spawn the child ourselves instead of through SlavePty::spawn_command:
+    // portable-pty's pre_exec closes every fd > 2 in the forked child,
+    // including Rust std's internal pipe the child uses to report exec
+    // errors. Any exec failure then trips std's rtassert, aborting the child
+    // with "fatal runtime error: assertion failed: output.write(&bytes)
+    // .is_ok()" dumped into the pane while the real errno is lost. Opening
+    // the slave by path and wiring a std Command keeps that pipe intact, so
+    // spawn failures come back here as a plain Err. Fds Plaza creates are
+    // CLOEXEC by default, so skipping the fd sweep leaks nothing of ours.
+    let slave = open_slave(pair.master.as_ref())?;
+    drop(pair.slave); // our own handle to the slave replaces it
 
-    let mut child = pair.slave.spawn_command(cmd)?;
-    drop(pair.slave); // we don't need the slave handle anymore
+    let mut cmd = std::process::Command::new(spec.command.program.as_str());
+    cmd.args(spec.command.args.iter().map(|a| a.as_str()));
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.current_dir(cwd);
+    }
+    cmd.stdin(slave.try_clone()?).stdout(slave.try_clone()?).stderr(slave);
+    unsafe {
+        cmd.pre_exec(|| {
+            // New session with the pty as controlling terminal, so the child
+            // gets SIGWINCH on resize and sudo can prompt on the tty.
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn()?;
 
     let mut reader = pair.master.try_clone_reader()?;
     let writer = pair.master.take_writer()?;
@@ -97,7 +120,8 @@ pub fn start_action(
     std::thread::spawn(move || {
         let status = child.wait();
         let (success, code) = match status {
-            Ok(s) => (s.success(), s.exit_code()),
+            // code() is None when the child died from a signal; report 1.
+            Ok(s) => (s.success(), s.code().unwrap_or(1) as u32),
             Err(_) => (false, 1),
         };
         let _ = tx.send(AppEvent::ActionFinished { id, success, code });
@@ -113,6 +137,23 @@ pub fn start_action(
         csi_fix: CsiLineFix::default(),
         _master: pair.master,
     })
+}
+
+/// Open the slave side of `master`'s pty by path, for use as a std Command's
+/// stdio. portable-pty does not expose the slave fd, but the path is
+/// recoverable from the master via ptsname.
+fn open_slave(master: &dyn MasterPty) -> anyhow::Result<std::fs::File> {
+    let fd = master
+        .as_raw_fd()
+        .ok_or_else(|| anyhow::anyhow!("pty master has no fd"))?;
+    let mut buf = [0 as libc::c_char; 128];
+    let rc = unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) };
+    if rc != 0 {
+        let err = std::io::Error::from_raw_os_error(rc);
+        return Err(anyhow::anyhow!("ptsname_r failed: {err}"));
+    }
+    let path = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str()?;
+    Ok(std::fs::OpenOptions::new().read(true).write(true).open(path)?)
 }
 
 /// vt100 0.15 implements neither CSI E (Cursor Next Line) nor CSI F (Cursor
@@ -277,6 +318,34 @@ mod tests {
         let mut fix = CsiLineFix::default();
         // A color SGR then plain text must be untouched.
         assert_eq!(fix.rewrite(b"\x1b[31mred\x1b[0m"), b"\x1b[31mred\x1b[0m");
+    }
+
+    #[tokio::test]
+    async fn spawn_failure_is_a_start_action_error() {
+        // A script whose interpreter does not exist passes any PATH lookup but
+        // fails at exec time. That failure must come back as an error from
+        // start_action, not as an aborted child that dumps "fatal runtime
+        // error: assertion failed: output.write(&bytes).is_ok()" into the pane.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("plaza-spawn-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("badshebang");
+        std::fs::write(&script, "#!/nonexistent-interpreter\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let spec = ActionSpec {
+            targets: vec!["x".into()],
+            source_id: SourceId::Pacman,
+            action: Action::Install,
+            command: CommandLine {
+                program: script.to_string_lossy().into_owned(),
+                args: vec![],
+            },
+        };
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let res = start_action(spec, 1, 24, 80, tx);
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(res.is_err(), "exec failure must surface as an error");
     }
 
     #[tokio::test]

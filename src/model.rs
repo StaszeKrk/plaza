@@ -696,7 +696,7 @@ pub fn source_upgrade_command(source_id: SourceId, aur_bin: &str) -> CommandLine
         // upgrade half surfaces apt's proceed prompt.
         SourceId::Apt => CommandLine {
             program: "sh".into(),
-            args: vec!["-c".into(), "sudo apt-get update && sudo apt-get upgrade".into()],
+            args: vec!["-c".into(), "\"sudo apt-get update && sudo apt-get upgrade -y\"".into()],
         },
         // dnf upgrade refreshes metadata itself; interactive (no -y) so it
         // surfaces the proceed prompt.
@@ -1020,7 +1020,7 @@ mod tests {
         assert_eq!(all.program, "sh");
         assert_eq!(
             all.args,
-            vec!["-c".to_string(), "sudo apt-get update && sudo apt-get upgrade".to_string()]
+            vec!["-c".to_string(), "sudo apt-get update && sudo apt-get upgrade -y".to_string()]
         );
     }
 
